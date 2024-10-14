@@ -1,9 +1,14 @@
-version: '3.8'
+version: '3.3'
 
 services:
   bot:
+    container_name: bot
     build: .
     volumes:
-      - ./credentials.json:/app/credentials/credentials.json
-      - ./.env:/app/.env
+      - ./credentials.json:/app/credentials.json:ro
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
     restart: unless-stopped

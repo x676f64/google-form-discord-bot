@@ -4,34 +4,88 @@
 NODE_ENV ?= development
 SERVICE_NAME = google-forms-discord-bot
 SERVICE_FILE = /etc/systemd/system/$(SERVICE_NAME).service
-STARTUP_SCRIPT = $(HOME)/start-$(SERVICE_NAME).sh
 NODE_VERSION = 20.11.1
+NVM_DIR = $(HOME)/.nvm
+NVM_SCRIPT = $(NVM_DIR)/nvm.sh
+
+# Detect the available package manager
+PACKAGE_MANAGER := $(shell \
+    if command -v pnpm >/dev/null 2>&1; then \
+        echo "pnpm"; \
+    elif command -v bun >/dev/null 2>&1; then \
+        echo "bun"; \
+    elif command -v yarn >/dev/null 2>&1; then \
+        echo "yarn"; \
+    elif command -v npm >/dev/null 2>&1; then \
+        echo "npm"; \
+    else \
+        echo "No supported package manager found"; \
+        exit 1; \
+    fi \
+)
+
+# Define commands based on the detected package manager
+ifeq ($(PACKAGE_MANAGER),pnpm)
+    INSTALL_CMD := pnpm install
+    RUN_CMD := pnpm run
+else ifeq ($(PACKAGE_MANAGER),bun)
+    INSTALL_CMD := bun install
+    RUN_CMD := bun run
+else ifeq ($(PACKAGE_MANAGER),yarn)
+    INSTALL_CMD := yarn
+    RUN_CMD := yarn
+else ifeq ($(PACKAGE_MANAGER),npm)
+    INSTALL_CMD := npm install
+    RUN_CMD := npm run
+endif
+
+# Function to create service file
+define create_service_file
+	@echo "Creating service file..."
+	@sudo bash -c 'cat > $(SERVICE_FILE) << EOF
+[Unit]
+Description=Google Forms to Discord Bot
+After=network.target
+
+[Service]
+Environment=NODE_VERSION=$(NODE_VERSION)
+Environment=NODE_ENV=$(NODE_ENV)
+WorkingDirectory=$(shell pwd)
+ExecStart=$(NVM_DIR)/nvm-exec $(RUN_CMD) start
+Restart=always
+User=$(shell whoami)
+
+[Install]
+WantedBy=multi-user.target
+EOF'
+endef
 
 # PHONY targets
-.PHONY: all install start dev lint format clean setup install-service remove-service create-startup-script ensure-node-version
+.PHONY: all install start dev lint format clean setup install-service remove-service install-nvm ensure-nvm
 
 # Default target
 all: install start
 
 # Install dependencies
-install:
-	pnpm install
+install: ensure-nvm
+	@echo "Installing dependencies using $(PACKAGE_MANAGER)..."
+	@. $(NVM_SCRIPT) && nvm use $(NODE_VERSION) && $(INSTALL_CMD)
 
 # Start the bot
-start:
-	NODE_ENV=$(NODE_ENV) pnpm start
+start: ensure-nvm
+	@. $(NVM_SCRIPT) && nvm use $(NODE_VERSION) && NODE_ENV=$(NODE_ENV) $(RUN_CMD) start
 
 # Run in development mode
-dev:
-	NODE_ENV=development pnpm run dev
+dev: ensure-nvm
+	@. $(NVM_SCRIPT) && nvm use $(NODE_VERSION) && NODE_ENV=development $(RUN_CMD) dev
 
 # Lint the code
-lint:
-	pnpm run lint
+lint: ensure-nvm
+	@. $(NVM_SCRIPT) && nvm use $(NODE_VERSION) && $(RUN_CMD) lint
 
 # Lint and fix the code
-format:
-	pnpm run lint --fix
+format: ensure-nvm
+	@. $(NVM_SCRIPT) && nvm use $(NODE_VERSION) && $(RUN_CMD) lint --fix
 
 # Clean up
 clean:
@@ -44,50 +98,26 @@ setup:
 	cp .env.example .env
 	@echo "Please edit .env file with your configuration"
 
-# Create startup script
-create-startup-script: ensure-node-version
-	@echo "Creating startup script..."
-	@tee $(STARTUP_SCRIPT) > /dev/null <<EOF
-	#!/bin/bash
-	export NVM_DIR="$(HOME)/.nvm"
-	[ -s "$$NVM_DIR/nvm.sh" ] && \. "$$NVM_DIR/nvm.sh"  # This loads nvm
+# Install nvm
+install-nvm:
+	@echo "Installing nvm..."
+	@curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash
+	@echo "Please restart your terminal or run 'source ~/.bashrc' to use nvm"
 
-	# Use the correct Node version
-	nvm use $(NODE_VERSION) || { echo "Failed to switch to Node $(NODE_VERSION)"; exit 1; }
-
-	# Navigate to your project directory
-	cd $(shell pwd)
-
-	# Start your Node.js application
-	exec pnpm start
-	EOF
-	@chmod +x $(STARTUP_SCRIPT)
+# Ensure nvm is installed and the correct Node version is used
+ensure-nvm:
+	@if [ ! -f "$(NVM_SCRIPT)" ]; then \
+		echo "nvm is not installed. Please run 'make install-nvm' first."; \
+		exit 1; \
+	fi
+	@. $(NVM_SCRIPT) && nvm install $(NODE_VERSION)
 
 # Install the service
-install-service: install create-startup-script
-	@echo "Creating service file..."
-	@sudo tee $(SERVICE_FILE) > /dev/null <<EOF
-	[Unit]
-	Description=Google Forms to Discord Bot
-	After=network.target
+install-service: install
+	@echo "Installing service..."
+	@chmod +x install_service.sh
+	@./install_service.sh
 
-	[Service]
-	ExecStart=$(STARTUP_SCRIPT)
-	Restart=always
-	User=$(shell whoami)
-	Environment=NODE_ENV=$(NODE_ENV)
-	WorkingDirectory=$(shell pwd)
-
-	[Install]
-	WantedBy=multi-user.target
-	EOF
-	@echo "Reloading systemd..."
-	@sudo systemctl daemon-reload
-	@echo "Enabling service..."
-	@sudo systemctl enable $(SERVICE_NAME)
-	@echo "Starting service..."
-	@sudo systemctl start $(SERVICE_NAME)
-	@echo "Service installed and started."
 
 # Remove the service
 remove-service:
@@ -97,8 +127,6 @@ remove-service:
 	@sudo systemctl disable $(SERVICE_NAME) || true
 	@echo "Removing service file..."
 	@sudo rm -f $(SERVICE_FILE)
-	@echo "Removing startup script..."
-	@rm -f $(STARTUP_SCRIPT)
 	@echo "Reloading systemd..."
 	@sudo systemctl daemon-reload
 	@echo "Service removed."

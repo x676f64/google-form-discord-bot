@@ -100,17 +100,6 @@ Repeat this process for each form you want the bot to monitor.
 
 ## Configuration
 
-[Configuration section remains unchanged, but you might want to add an example for the FORM_FORUM_MAPPING like this:]
-
-- `FORM_FORUM_MAPPING`: A JSON string mapping Google Form IDs to Discord forum channel IDs. For example:
-  ```
-  {"1FAIpQLSe****************************************":"1234567890123456789"}
-  ```
-  Where the first string is your Google Form ID, and the second is your Discord forum channel ID.
-
-
-## Configuration
-
 Edit the `.env` file with the following information:
 
 - `DISCORD_BOT_TOKEN`: Your Discord bot token
@@ -123,10 +112,15 @@ Edit the `.env` file with the following information:
 - `ERROR_LOG_FILENAME`: Filename for error logs (default: error.log)
 - `COMBINED_LOG_FILENAME`: Filename for combined logs (default: combined.log)
 - `PROJECT_NAME_KEYS`: JSON array of keys to identify the project name in form responses
+- `FORM_FORUM_MAPPING`: A JSON string mapping Google Form IDs to Discord forum channel IDs. For example:
+  ```
+  {"1FAIpQLSe****************************************":"1234567890123456789"}
+  ```
+  Where the first string is your Google Form ID, and the second is your Discord forum channel ID.
 
 ## Docker
 
-This project can be containerized using Docker. A Dockerfile and docker-compose.yml are provided in the root of the project.
+This project is containerized using Docker. A Dockerfile and docker-compose.yml are provided in the root of the project.
 
 ### Using docker-compose (Recommended)
 
@@ -150,34 +144,58 @@ This project can be containerized using Docker. A Dockerfile and docker-compose.
    docker-compose down
    ```
 
+### Environment Variables
+
+All environment variables should be set in your `.env` file. The Docker setup will use this file directly, so there's no need to pass environment variables via the Docker command line.
+
+
+### Updating the Bot
+
+If you make changes to the bot code:
+
+1. Stop the running container:
+   ```bash
+   docker-compose down
+   ```
+
+2. Rebuild the image and start a new container:
+   ```bash
+   docker-compose up -d --build
+   ```
+
+This will ensure that your container is running the latest version of your code.
+
 ### Manual Docker Commands
 
 If you prefer to use Docker without docker-compose, you can use the following commands:
 
-#### Building the Docker Image
+#### Running the Docker Container Manually
 
-To build the Docker image, run the following command in the project root:
-
-```bash
-docker build -t google-forms-discord-bot .
-```
-
-#### Running the Docker Container
-
-To run the container, use the following command:
+While using docker-compose is recommended, if you need to run the container manually, you can use the following command:
 
 ```bash
-docker run -v $(pwd)/credentials.json:/app/credentials/credentials.json -v $(pwd)/.env:/app/.env -d google-forms-discord-bot
+docker run \
+  -v $(pwd)/credentials.json:/app/credentials.json:ro \
+  --env-file .env \
+  -e NODE_ENV=production \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json \
+  -d \
+  --name google-forms-discord-bot \
+  google-forms-discord-bot
 ```
 
 This command does the following:
-- Mounts your local `credentials.json` file into the container.
-- Mounts your local `.env` file into the container.
+- Mounts your local `credentials.json` file into the container as read-only.
+- Loads environment variables from your local `.env` file.
+- Sets the `NODE_ENV` to production.
+- Sets the `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
 - Runs the container in detached mode.
+- Names the container for easier management.
 
-### Environment Variables
-
-All environment variables should be set in your `.env` file. The Docker setup will use this file directly, so there's no need to pass environment variables via the Docker command line.
+Note: Make sure you've built the Docker image first using:
+```bash
+docker build -t google-forms-discord-bot .
+```
 
 ### Updating the Bot
 
