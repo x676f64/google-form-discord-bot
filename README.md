@@ -220,7 +220,7 @@ make dev
 
 - To run linting and automatically fix issues:
   ```
-  make lint-fix
+  make format
   ```
 
 - To clean up:
