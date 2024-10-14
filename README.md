@@ -23,8 +23,8 @@ This bot automatically fetches responses from Google Forms and posts them to des
 
 1. Clone the repository:
    ```
-   git clone [your-repo-url]
-   cd [your-repo-name]
+   git clone https://github.com/x676f64/google-form-discord-bot.git
+   cd google-form-discord-bot
    ```
 
 2. Install dependencies:
