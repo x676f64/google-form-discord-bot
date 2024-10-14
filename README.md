@@ -267,10 +267,6 @@ The bot uses Winston for logging. Logs are written to:
 
 The bot implements error handling for various scenarios, including API rate limiting, access issues, and unexpected errors. Check the logs for detailed error information.
 
-## Contributing
-
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
-
 ## License
 
 This project is licensed under the ISC License.
