@@ -2,7 +2,7 @@ require('dotenv').config();
 const fs = require('fs').promises;
 const path = require('path');
 const { google } = require('googleapis');
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType, PermissionFlagsBits } = require('discord.js');
 const winston = require('winston');
 const { decodeAddress, encodeAddress } = require('@polkadot/util-crypto');
 
@@ -70,6 +70,37 @@ async function getFormDetails(auth, formId) {
   }
 }
 
+async function getAdminRole(guild) {
+  if (!ADMIN_ROLE_ID) {
+    logger.warn('No admin role ID or name provided. Admin role tagging will be skipped.');
+    return null;
+  }
+
+  try {
+    let adminRole;
+    if (/^\d+$/.test(ADMIN_ROLE_ID)) {
+      // If it's a numeric string, treat it as an ID
+      adminRole = await guild.roles.fetch(ADMIN_ROLE_ID);
+    } else {
+      // If it's not numeric, treat it as a name (case-insensitive)
+      const lowerCaseRoleName = ADMIN_ROLE_ID.toLowerCase();
+      adminRole = guild.roles.cache.find(role => role.name.toLowerCase() === lowerCaseRoleName);
+    }
+
+    if (adminRole) {
+      logger.info(`Admin role set: "${adminRole.name}" (${adminRole.id})`);
+      return adminRole;
+    } else {
+      logger.warn(`Admin role "${ADMIN_ROLE_ID}" not found in the guild.`);
+      return null;
+    }
+  } catch (error) {
+    logger.error(`Error fetching admin role: ${error.message}`);
+    return null;
+  }
+}
+
+
 async function loadResponseTrack() {
   try {
     const data = await fs.readFile(RESPONSE_TRACK_FILE, 'utf8');
@@ -104,7 +135,7 @@ async function saveResponseTrack(track) {
 }
 
 function truncate(str, n) {
-  return str.length > n ? `${str.slice(0, n - 1)  }…` : str;
+  return str.length > n ? `${str.slice(0, n - 1)}…` : str;
 }
 
 function getProjectName(response) {
@@ -116,22 +147,58 @@ function getProjectName(response) {
   return projectNameKey ? response[projectNameKey] : 'Unknown Project';
 }
 
-async function sendToDiscord(formattedResponse, formName, formId) {
+async function createOrFetchTag(forum, tagName) {
+  try {    
+    const existingTags = await forum.availableTags;    
+    let tag = existingTags.find(t => t.name === tagName);
+    
+    if (!tag) {
+      //logger.info(`Tag "${tagName}" not found. Attempting to create it.`);
+      const newTags = [...existingTags, { name: tagName }];
+      await forum.setAvailableTags(newTags);
+      tag = newTags.find(t => t.name === tagName);
+      logger.info(`Created new tag "${tagName}" for forum ${forum.name}`);
+    }
+
+    if (!tag || !tag.id) {
+      logger.error(`Failed to create or fetch tag "${tagName}" with a valid ID`);
+      return null;
+    }
+    return tag;
+  } catch (error) {
+    logger.error(`Error creating/fetching tag "${tagName}": ${error.message}`);
+    return null;
+  }
+}
+
+
+async function sendToDiscord(formattedResponse, formName, formId, trackedResponses) {
   try {
-    const forumId = formForumMapping[formId];
+    const forumMapping = formForumMapping[formId];
+    let forumId, customForumName, tagName;
+
+    if (Array.isArray(forumMapping)) {
+      [forumId, customForumName] = forumMapping;
+      tagName = customForumName; // Use customForumName as tagName if provided
+    } else {
+      forumId = forumMapping;
+    }
+
+    logger.info(`Processing form ${formId} with mapping: ${JSON.stringify(forumMapping)}`);
+
     if (!forumId) {
       logger.error(`No forum ID mapped for form ID ${formId}`);
-      return false; // Return false to indicate failure
+      return false;
     }
 
     const forum = await discordClient.channels.fetch(forumId);
 
-    if (!forum || forum.type !== 15) {
+    if (!forum || forum.type !== ChannelType.GuildForum) {
       logger.error(`Channel with ID ${forumId} is not a forum channel.`);
-      return false; // Return false to indicate failure
+      return false;
     }
 
-    const forumName = forum.name;
+    const forumName = customForumName || forum.name;
 
     const threadName = truncate(
       `${formattedResponse.Submitted} - ${getProjectName(formattedResponse)} `,
@@ -139,48 +206,55 @@ async function sendToDiscord(formattedResponse, formName, formId) {
     );
     const message = formatResponseMessage(formName, formattedResponse);
 
+    let appliedTags = [];
+    if (tagName) {
+      const tag = await createOrFetchTag(forum, tagName);
+      if (tag && tag.id) {
+        appliedTags.push(tag.id);
+      }
+    }
+
     const thread = await forum.threads.create({
       name: threadName,
       message: {
         content: message,
         flags: 1 << 2, // This sets the SUPPRESS_EMBEDS flag
       },
+      appliedTags: appliedTags,
       autoArchiveDuration: 10080, // Set to maximum value (7 days)
     });
 
-    logger.info(`Successfully created thread ${threadName} in ${forumName}`);
+    logger.info(`Successfully created thread ${threadName} in ${forumName} with tags: ${appliedTags.join(', ')}`);
 
     // Tag admin role in the newly created thread
-    if (ADMIN_ROLE_ID) {
-      const guild = forum.guild;
-      const adminRole = await guild.roles.fetch(ADMIN_ROLE_ID);
+    const guild = forum.guild;
+    const adminRole = await getAdminRole(guild);
 
-      if (adminRole) {
-        await thread.send({
-          content: `<@&${ADMIN_ROLE_ID}> A new funding request has been received.`,
-          allowedMentions: { roles: [ADMIN_ROLE_ID] },
-        });
-        //logger.info(`Tagged admin role "${adminRole.name}" (${ADMIN_ROLE_ID}) in the new thread in forum "${forumName}".`);
-      } else {
-        logger.warn(
-          `Admin role with ID ${ADMIN_ROLE_ID} not found in the guild. Skipping tagging.`,
-        );
-      }
+    if (adminRole) {
+      await thread.send({
+        content: `<@&${adminRole.id}> A new funding request has been received.`,
+        allowedMentions: { roles: [adminRole.id] },
+      });
     } else {
-      logger.warn('No admin role ID provided. Skipping admin role tagging.');
+      logger.warn('Admin role not found or not set. Skipping admin role tagging.');
     }
 
-    return true; // Return true to indicate success
+    // Update and save response track
+    trackedResponses[formId] = trackedResponses[formId] || [];
+    trackedResponses[formId].push(formattedResponse);
+    await saveResponseTrack(trackedResponses);
+
+    return true;
   } catch (error) {
     logger.error(`Error sending message to Discord: ${error.message}`);
     if (error.code) {
       logger.error(`Discord API Error Code: ${error.code}`);
     }
-    return false; // Return false to indicate failure
+    return false;
   }
 }
 
-async function checkNewResponses(auth, formId, trackedResponses) {
+async function checkNewResponses(auth, formId, responseTrack) {
   const forms = google.forms({ version: 'v1', auth });
   let formName = formId;
   let formDetails;
@@ -192,9 +266,7 @@ async function checkNewResponses(auth, formId, trackedResponses) {
     if (formDetails && formDetails.info) {
       formName = formDetails.info.title;
     } else {
-      logger.warn(
-        `Unable to fetch form details for ${formId}. Using form ID as name.`,
-      );
+      logger.warn(`Unable to fetch form details for ${formId}. Using form ID as name.`);
     }
 
     const response = await forms.forms.responses.list({ formId });
@@ -202,60 +274,37 @@ async function checkNewResponses(auth, formId, trackedResponses) {
 
     if (responses.length === 0) {
       logger.info(`No responses found for form "${formName}".`);
-      return { updatedResponses: null, newResponsesAdded: false };
+      return false;
     }
 
+    const trackedResponses = responseTrack[formId] || [];
     const newResponses = responses.filter(
-      (r) =>
-        !trackedResponses.some(
-          (tr) => tr.Submitted === r.lastSubmittedTime.split('T')[0],
-        ),
+      (r) => !trackedResponses.some((tr) => tr.Submitted === r.lastSubmittedTime.split('T')[0])
     );
 
     if (newResponses.length > 0) {
-      logger.info(
-        `Found ${newResponses.length} new responses for form "${formName}"`,
-      );
+      logger.info(`Found ${newResponses.length} new responses for form "${formName}"`);
 
-      newResponses.sort(
-        (a, b) => new Date(b.lastSubmittedTime) - new Date(a.lastSubmittedTime),
-      );
+      // Sort new responses by submission time (oldest first)
+      newResponses.sort((a, b) => new Date(a.lastSubmittedTime) - new Date(b.lastSubmittedTime));
 
-      const formattedResponses = newResponses.map((response) =>
-        formatResponse(response, formDetails),
-      );
-
-      let allThreadsCreated = true;
-      for (let i = formattedResponses.length - 1; i >= 0; i--) {
-        const threadCreated = await sendToDiscord(
-          formattedResponses[i],
-          formName,
-          formId,
-        );
+      for (const response of newResponses) {
+        const formattedResponse = formatResponse(response, formDetails);
+        const threadCreated = await sendToDiscord(formattedResponse, formName, formId, responseTrack);
+        
         if (!threadCreated) {
-          allThreadsCreated = false;
-          break;
+          logger.warn(`Failed to create thread for response submitted on ${formattedResponse.Submitted}`);
         }
       }
 
-      if (allThreadsCreated) {
-        return {
-          updatedResponses: [...trackedResponses, ...formattedResponses],
-          newResponsesAdded: true,
-        };
-      } else {
-        logger.warn(
-          `Not all threads were created successfully for form "${formName}". Skipping response tracking update.`,
-        );
-        return { updatedResponses: null, newResponsesAdded: false };
-      }
+      return true;
     } else {
       logger.info(`No new responses for form "${formName}"`);
-      return { updatedResponses: null, newResponsesAdded: false };
+      return false;
     }
   } catch (error) {
     handleApiError(error, `Error checking responses for form "${formName}"`);
-    return { updatedResponses: null, newResponsesAdded: false };
+    return false;
   }
 }
 
@@ -376,37 +425,35 @@ async function main() {
       logger.info(`Logged in as ${discordClient.user.tag}`);
       logger.info(`Serving in guild: ${process.env.DISCORD_GUILD_ID}`);
 
-      // Log forum mappings with forum names
+      // Log forum mappings with forum names and tags
       const forumMappingsWithNames = {};
-      for (const [formId, forumId] of Object.entries(formForumMapping)) {
+      for (const [formId, mapping] of Object.entries(formForumMapping)) {
         try {
+          let forumId, customName, tagName;
+          if (Array.isArray(mapping)) {
+            [forumId, customName, tagName] = mapping;
+          } else {
+            forumId = mapping;
+          }
+
           const forum = await discordClient.channels.fetch(forumId);
-          forumMappingsWithNames[formId] = forum ? forum.name : 'Unknown Forum';
+          forumMappingsWithNames[formId] = {
+            name: customName || (forum ? forum.name : 'Unknown Forum'),
+            tagName: tagName || 'No Tag'
+          };
         } catch (error) {
-          forumMappingsWithNames[formId] = 'Error fetching forum';
+          forumMappingsWithNames[formId] = { name: 'Error fetching forum', tagName: 'Error' };
           logger.error(
-            `Error fetching forum for formId ${formId}: ${error.message}`,
+            `Error fetching forum for formId ${formId}: ${error.message}`
           );
         }
       }
-      logger.info('Forum mappings:', forumMappingsWithNames);
+      logger.info('Forum mappings:', JSON.stringify(forumMappingsWithNames, null, 2));
 
-      if (ADMIN_ROLE_ID) {
-        const guild = await discordClient.guilds.fetch(
-          process.env.DISCORD_GUILD_ID,
-        );
-        const adminRole = await guild.roles.fetch(ADMIN_ROLE_ID);
-        if (adminRole) {
-          logger.info(`Admin role set: "${adminRole.name}" (${ADMIN_ROLE_ID})`);
-        } else {
-          logger.warn(
-            `Admin role with ID ${ADMIN_ROLE_ID} not found in the guild.`,
-          );
-        }
-      } else {
-        logger.warn(
-          'No admin role ID set. Admin role tagging will be skipped.',
-        );
+      const guild = await discordClient.guilds.fetch(process.env.DISCORD_GUILD_ID);
+      const adminRole = await getAdminRole(guild);
+      if (!adminRole) {
+        logger.warn('Admin role not found or not set. Admin role tagging will be skipped.');
       }
     });
 
@@ -417,22 +464,12 @@ async function main() {
     await discordClient.login(process.env.DISCORD_BOT_TOKEN);
 
     while (true) {
-      let hasChanges = false;
       for (const formId of Object.keys(formForumMapping)) {
-        responseTrack[formId] = responseTrack[formId] || [];
         try {
-          const { updatedResponses, newResponsesAdded } =
-            await checkNewResponses(auth, formId, responseTrack[formId]);
-          if (updatedResponses !== null && newResponsesAdded) {
-            responseTrack[formId] = updatedResponses;
-            hasChanges = true;
-          }
+          await checkNewResponses(auth, formId, responseTrack);
         } catch (error) {
           logger.error(`Error processing form ${formId}: ${error.message}`);
         }
-      }
-      if (hasChanges) {
-        await saveResponseTrack(responseTrack);
       }
       await new Promise((resolve) => setTimeout(resolve, CHECK_INTERVAL));
     }
