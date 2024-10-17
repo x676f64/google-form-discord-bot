@@ -2,7 +2,7 @@ require('dotenv').config();
 const fs = require('fs').promises;
 const path = require('path');
 const { google } = require('googleapis');
-const { Client, GatewayIntentBits, ChannelType, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const winston = require('winston');
 const { decodeAddress, encodeAddress } = require('@polkadot/util-crypto');
 
@@ -18,6 +18,7 @@ const ERROR_LOG_FILE = process.env.ERROR_LOG_FILENAME || 'error.log';
 const COMBINED_LOG_FILE = process.env.COMBINED_LOG_FILENAME || 'combined.log';
 const CHECK_INTERVAL = (parseInt(process.env.CHECK_INTERVAL) || 86400) * 1000;
 const PROJECT_NAME_KEYS = JSON.parse(process.env.PROJECT_NAME_KEYS || '["name of your project"]');
+const RESPONSE_URL = process.env.RESPONSE_URL;
 
 // Parse the FORM_FORUM_MAPPING environment variable
 const formForumMapping = JSON.parse(process.env.FORM_FORUM_MAPPING || '{}');
@@ -100,6 +101,19 @@ async function getAdminRole(guild) {
   }
 }
 
+function splitIntoQuestions(message) {
+  return message.split('### ').filter(q => q.trim() !== '').map(q => `### ${  q.trim()}`);
+}
+
+function createButton() {
+  return new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setStyle(ButtonStyle.Link)
+        .setLabel('View Full Response')
+        .setURL(RESPONSE_URL),
+    );
+}
 
 async function loadResponseTrack() {
   try {
@@ -148,12 +162,11 @@ function getProjectName(response) {
 }
 
 async function createOrFetchTag(forum, tagName) {
-  try {    
-    const existingTags = await forum.availableTags;    
+  try {
+    const existingTags = await forum.availableTags;
     let tag = existingTags.find(t => t.name === tagName);
-    
+
     if (!tag) {
-      //logger.info(`Tag "${tagName}" not found. Attempting to create it.`);
       const newTags = [...existingTags, { name: tagName }];
       await forum.setAvailableTags(newTags);
       tag = newTags.find(t => t.name === tagName);
@@ -172,14 +185,14 @@ async function createOrFetchTag(forum, tagName) {
 }
 
 
-async function sendToDiscord(formattedResponse, formName, formId, trackedResponses) {
+async function sendToDiscord(formattedResponse, formId, trackedResponses) {
   try {
     const forumMapping = formForumMapping[formId];
     let forumId, customForumName, tagName;
 
     if (Array.isArray(forumMapping)) {
       [forumId, customForumName] = forumMapping;
-      tagName = customForumName; // Use customForumName as tagName if provided
+      tagName = customForumName;
     } else {
       forumId = forumMapping;
     }
@@ -204,9 +217,11 @@ async function sendToDiscord(formattedResponse, formName, formId, trackedRespons
       `${formattedResponse.Submitted} - ${getProjectName(formattedResponse)} `,
       100,
     );
-    const message = formatResponseMessage(formName, formattedResponse);
+    const formattedMessage = formatResponseMessage(formattedResponse);
+    const message = formattedMessage.content;
+    const components = formattedMessage.components;
 
-    let appliedTags = [];
+    const appliedTags = [];
     if (tagName) {
       const tag = await createOrFetchTag(forum, tagName);
       if (tag && tag.id) {
@@ -214,17 +229,38 @@ async function sendToDiscord(formattedResponse, formName, formId, trackedRespons
       }
     }
 
+    const questions = splitIntoQuestions(message);
+
+    let initialMessage = '';
+    const remainingQuestions = [];
+    const maxLength = 2000 - JSON.stringify(createButton()).length - 100; // Buffer for Discord metadata
+
+    for (const question of questions) {
+      if (initialMessage.length + question.length <= maxLength) {
+        initialMessage += `${question  }\n\n`;
+      } else {
+        remainingQuestions.push(question);
+      }
+    }
+
+    // Create thread with as many questions as possible and embed
     const thread = await forum.threads.create({
       name: threadName,
       message: {
-        content: message,
+        content: initialMessage.trim(),
         flags: 1 << 2, // This sets the SUPPRESS_EMBEDS flag
+        components: [...components],
       },
-      appliedTags: appliedTags,
+      appliedTags,
       autoArchiveDuration: 10080, // Set to maximum value (7 days)
     });
 
     logger.info(`Successfully created thread ${threadName} in ${forumName} with tags: ${appliedTags.join(', ')}`);
+
+    // Send remaining questions as separate messages
+    for (const question of remainingQuestions) {
+      await thread.send({ content: question });
+    }
 
     // Tag admin role in the newly created thread
     const guild = forum.guild;
@@ -279,7 +315,7 @@ async function checkNewResponses(auth, formId, responseTrack) {
 
     const trackedResponses = responseTrack[formId] || [];
     const newResponses = responses.filter(
-      (r) => !trackedResponses.some((tr) => tr.Submitted === r.lastSubmittedTime.split('T')[0])
+      (r) => !trackedResponses.some((tr) => tr.Submitted === r.lastSubmittedTime.split('T')[0]),
     );
 
     if (newResponses.length > 0) {
@@ -290,8 +326,8 @@ async function checkNewResponses(auth, formId, responseTrack) {
 
       for (const response of newResponses) {
         const formattedResponse = formatResponse(response, formDetails);
-        const threadCreated = await sendToDiscord(formattedResponse, formName, formId, responseTrack);
-        
+        const threadCreated = await sendToDiscord(formattedResponse, formId, responseTrack);
+
         if (!threadCreated) {
           logger.warn(`Failed to create thread for response submitted on ${formattedResponse.Submitted}`);
         }
@@ -307,6 +343,7 @@ async function checkNewResponses(auth, formId, responseTrack) {
     return false;
   }
 }
+
 
 function formatResponse(response, formDetails) {
   const questions = formDetails
@@ -328,7 +365,13 @@ function formatResponse(response, formDetails) {
       answerValue = answer.textAnswers.answers.map((a) => a.value).join(', ');
     } else if (answer.fileUploadAnswers) {
       answerValue = answer.fileUploadAnswers.answers
-        .map((a) => a.fileName)
+        .map((a) => {
+          const fileId = a.fileId;
+          const fileName = a.fileName;
+          const fileUrl = `https://drive.google.com/open?id=${fileId}`;
+          logger.info(`Processing file upload: ${fileName} (ID: ${fileId})`);
+          return `[${fileName}](${fileUrl})`;
+        })
         .join(', ');
     } else if (answer.scaleAnswers) {
       answerValue = answer.scaleAnswers.answers.map((a) => a.value).join(', ');
@@ -353,11 +396,12 @@ function formatResponse(response, formDetails) {
   return formattedResponse;
 }
 
+
 function isValidSubstrateAddress(address) {
   try {
     encodeAddress(decodeAddress(address));
     return true;
-  } catch (error) {
+  } catch {
     return false;
   }
 }
@@ -374,17 +418,47 @@ function formatStringWithSubstrateAddresses(str) {
   });
 }
 
-function formatResponseMessage(formName, response) {
+function formatResponseMessage(response) {
   let message = '';
+  const buttons = [];
 
   Object.entries(response).forEach(([key, value]) => {
     if (value && key !== 'Submitted') {
-      message += `### ${key}\n`;
-      message += `${formatStringWithSubstrateAddresses(value)}\n\n`;
+      const lowerKey = key.toLowerCase();
+      
+      if (lowerKey.includes('website') && value.startsWith('http')) {
+        buttons.push(
+          new ButtonBuilder()
+            .setStyle(ButtonStyle.Link)
+            .setLabel('Website')
+            .setURL(value),
+        );
+      } else if (value.startsWith('[') && value.includes('](https://drive.google.com/open?id=')) {
+        const [fileName, fileUrl] = value.slice(1, -1).split('](');
+        buttons.push(
+          new ButtonBuilder()
+            .setStyle(ButtonStyle.Link)
+            .setLabel(`${fileName.length > 20 ? `${fileName.substring(0, 17)  }...` : fileName}`)
+            .setURL(fileUrl),
+        );
+      } else {
+        message += `### ${key}\n`;
+        message += `${formatStringWithSubstrateAddresses(value)}\n\n`;
+      }
     }
   });
 
-  return message;
+  // Add the "View Full Response" button
+  buttons.push(
+    new ButtonBuilder()
+      .setStyle(ButtonStyle.Link)
+      .setLabel('Spreadsheet')
+      .setURL(RESPONSE_URL),
+  );
+
+  // Create a single ActionRow with all buttons
+  const components = buttons.length > 0 ? [new ActionRowBuilder().addComponents(buttons)] : [];
+  return { content: message.trim(), components };
 }
 
 function handleApiError(error, context) {
@@ -439,12 +513,12 @@ async function main() {
           const forum = await discordClient.channels.fetch(forumId);
           forumMappingsWithNames[formId] = {
             name: customName || (forum ? forum.name : 'Unknown Forum'),
-            tagName: tagName || 'No Tag'
+            tagName: tagName || 'No Tag',
           };
         } catch (error) {
           forumMappingsWithNames[formId] = { name: 'Error fetching forum', tagName: 'Error' };
           logger.error(
-            `Error fetching forum for formId ${formId}: ${error.message}`
+            `Error fetching forum for formId ${formId}: ${error.message}`,
           );
         }
       }
