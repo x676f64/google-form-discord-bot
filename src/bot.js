@@ -71,6 +71,8 @@ async function getFormDetails(auth, formId) {
   }
 }
 
+
+
 async function getAdminRole(guild) {
   if (!ADMIN_ROLE_ID) {
     logger.warn('No admin role ID or name provided. Admin role tagging will be skipped.');
@@ -102,7 +104,7 @@ async function getAdminRole(guild) {
 }
 
 function splitIntoQuestions(message) {
-  return message.split('### ').filter(q => q.trim() !== '').map(q => `### ${  q.trim()}`);
+  return message.split('## ').filter(q => q.trim() !== '').map(q => `### ${  q.trim()}`);
 }
 
 function createButton() {
@@ -161,6 +163,38 @@ function getProjectName(response) {
   return projectNameKey ? response[projectNameKey] : 'Unknown Project';
 }
 
+function getTotalCost(response) {
+  const costKeys = ['total cost', 'budget', 'funding amount', 'requested amount'];
+  for (const [key, value] of Object.entries(response)) {
+    if (costKeys.some(costKey => key.toLowerCase().includes(costKey))) {
+      // Truncate the value to a reasonable length
+      const truncatedValue = truncateCost(value);
+      return truncatedValue;
+    }
+  }
+  return 'Cost not found';
+}
+
+function truncateCost(value) {
+  // Remove leading/trailing whitespace
+  let trimmedValue = value.trim();
+  
+  // If the value is longer than 20 characters, truncate it
+  if (trimmedValue.length > 20) {
+    // Try to find a sensible place to truncate
+    let truncateIndex = 20;
+    while (truncateIndex > 0 && !/[\s,.]/.test(trimmedValue[truncateIndex - 1])) {
+      truncateIndex--;
+    }
+    // If we couldn't find a good break point, just use 20
+    if (truncateIndex === 0) truncateIndex = 20;
+    
+    trimmedValue = trimmedValue.substring(0, truncateIndex) + '...';
+  }
+  
+  return trimmedValue;
+}
+
 async function createOrFetchTag(forum, tagName) {
   try {
     const existingTags = await forum.availableTags;
@@ -213,8 +247,11 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
 
     const forumName = customForumName || forum.name;
 
+    const projectName = getProjectName(formattedResponse);
+    const totalCost = getTotalCost(formattedResponse);
+
     const threadName = truncate(
-      `${formattedResponse.Submitted} - ${getProjectName(formattedResponse)} `,
+      `${formattedResponse.Submitted} - ${projectName} - ${totalCost}`,
       100,
     );
     const formattedMessage = formatResponseMessage(formattedResponse);
@@ -259,7 +296,10 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
 
     // Send remaining questions as separate messages
     for (const question of remainingQuestions) {
-      await thread.send({ content: question });
+      await thread.send({ 
+        content: question,
+        flags: 1 << 2
+      });
     }
 
     // Tag admin role in the newly created thread
@@ -426,24 +466,26 @@ function formatResponseMessage(response) {
     if (value && key !== 'Submitted') {
       const lowerKey = key.toLowerCase();
       
-      if (lowerKey.includes('website') && value.startsWith('http')) {
-        buttons.push(
-          new ButtonBuilder()
-            .setStyle(ButtonStyle.Link)
-            .setLabel('Website')
-            .setURL(value),
-        );
-      } else if (value.startsWith('[') && value.includes('](https://drive.google.com/open?id=')) {
-        const [fileName, fileUrl] = value.slice(1, -1).split('](');
-        buttons.push(
-          new ButtonBuilder()
-            .setStyle(ButtonStyle.Link)
-            .setLabel(`${fileName.length > 20 ? `${fileName.substring(0, 17)  }...` : fileName}`)
-            .setURL(fileUrl),
-        );
-      } else {
-        message += `### ${key}\n`;
-        message += `${formatStringWithSubstrateAddresses(value)}\n\n`;
+      if (!PROJECT_NAME_KEYS.some(nameKey => lowerKey.includes(nameKey.toLowerCase()))) {
+        if (lowerKey.includes('website') && value.startsWith('http')) {
+          buttons.push(
+            new ButtonBuilder()
+              .setStyle(ButtonStyle.Link)
+              .setLabel('Website')
+              .setURL(value),
+          );
+        } else if (value.startsWith('[') && value.includes('](https://drive.google.com/open?id=')) {
+          const [fileName, fileUrl] = value.slice(1, -1).split('](');
+          buttons.push(
+            new ButtonBuilder()
+              .setStyle(ButtonStyle.Link)
+              .setLabel(`${fileName.length > 20 ? `${fileName.substring(0, 17)  }...` : fileName}`)
+              .setURL(fileUrl),
+          );
+        } else {
+          message += `## ${key}\n`;
+          message += `${formatStringWithSubstrateAddresses(value)}\n\n`;
+        }
       }
     }
   });
