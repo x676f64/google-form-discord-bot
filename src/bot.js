@@ -91,7 +91,7 @@ async function getAdminRole(guild) {
     }
 
     if (adminRole) {
-      logger.info(`Admin role set: "${adminRole.name}" (${adminRole.id})`);
+      logger.debug(`Admin role set: "${adminRole.name}" (${adminRole.id})`);
       return adminRole;
     } else {
       logger.warn(`Admin role "${ADMIN_ROLE_ID}" not found in the guild.`);
@@ -220,6 +220,8 @@ async function createOrFetchTag(forum, tagName) {
 
 
 async function sendToDiscord(formattedResponse, formId, trackedResponses) {
+  let initialMessage = '';
+
   try {
     const forumMapping = formForumMapping[formId];
     let forumId, customForumName, tagName;
@@ -268,13 +270,12 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
 
     const questions = splitIntoQuestions(message);
 
-    let initialMessage = '';
     const remainingQuestions = [];
-    const maxLength = 2000 - JSON.stringify(createButton()).length - 100; // Buffer for Discord metadata
+    const maxLength = 2000 - JSON.stringify(createButton()).length;
 
     for (const question of questions) {
       if (initialMessage.length + question.length <= maxLength) {
-        initialMessage += `${question  }\n\n`;
+        initialMessage += `${question}\n\n`;
       } else {
         remainingQuestions.push(question);
       }
@@ -286,7 +287,7 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
       message: {
         content: initialMessage.trim(),
         flags: 1 << 2, // This sets the SUPPRESS_EMBEDS flag
-        components: [...components],
+        components
       },
       appliedTags,
       autoArchiveDuration: 10080, // Set to maximum value (7 days)
@@ -409,7 +410,7 @@ function formatResponse(response, formDetails) {
           const fileId = a.fileId;
           const fileName = a.fileName;
           const fileUrl = `https://drive.google.com/open?id=${fileId}`;
-          logger.info(`Processing file upload: ${fileName} (ID: ${fileId})`);
+          logger.debug(`Processing file upload: ${fileName} (ID: ${fileId})`);
           return `[${fileName}](${fileUrl})`;
         })
         .join(', ');
@@ -467,12 +468,16 @@ function formatResponseMessage(response) {
       const lowerKey = key.toLowerCase();
       
       if (!PROJECT_NAME_KEYS.some(nameKey => lowerKey.includes(nameKey.toLowerCase()))) {
-        if (lowerKey.includes('website') && value.startsWith('http')) {
+        if (lowerKey.includes('website')) {
+          let url = value;
+          if (!url.match(/^https?:\/\//i)) {
+            url = 'https://' + url;
+          }
           buttons.push(
             new ButtonBuilder()
               .setStyle(ButtonStyle.Link)
               .setLabel('Website')
-              .setURL(value),
+              .setURL(url),
           );
         } else if (value.startsWith('[') && value.includes('](https://drive.google.com/open?id=')) {
           const [fileName, fileUrl] = value.slice(1, -1).split('](');

@@ -4,6 +4,7 @@ services:
     build: .
     volumes:
       - ./credentials.json:/app/credentials.json:ro
+      - ./responses.json:/app/responses.json:rw
     env_file:
       - .env
     environment:
