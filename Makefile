@@ -61,7 +61,7 @@ EOF'
 endef
 
 # PHONY targets
-.PHONY: all install start dev lint format clean setup install-service remove-service install-nvm ensure-nvm
+.PHONY: all install start dev lint format clean setup install-service remove-service install-nvm ensure-nvm help
 
 # Default target
 all: install start
@@ -130,3 +130,29 @@ remove-service:
 	@echo "Reloading systemd..."
 	@sudo systemctl daemon-reload
 	@echo "Service removed."
+
+
+help: ## Show this help message
+	@echo "Google Forms to Discord Bot Makefile Commands:"
+	@echo
+	@echo "Usage: make [target]"
+	@echo
+	@echo "Targets:"
+	@echo "  all                  Install dependencies and start the bot"
+	@echo "  clean               Remove build artifacts, logs, and node_modules"
+	@echo "  dev                 Run the bot in development mode"
+	@echo "  ensure-nvm          Verify nvm is installed and set correct Node version"
+	@echo "  format              Automatically fix code style issues"
+	@echo "  help                Show this help message"
+	@echo "  install             Install project dependencies using detected package manager"
+	@echo "  install-nvm         Install Node Version Manager (nvm)"
+	@echo "  install-service     Install and enable systemd service"
+	@echo "  lint                Check code for style issues"
+	@echo "  remove-service      Stop and remove systemd service"
+	@echo "  setup               Create initial configuration from template"
+	@echo "  start               Start the bot in production mode"
+	@echo
+	@echo "Environment Variables:"
+	@echo "  NODE_ENV         Development environment (default: development)"
+	@echo "  SERVICE_NAME     Name of the systemd service (default: google-forms-discord-bot)"
+	@echo "  NODE_VERSION     Node.js version to use (default: 20.11.1)"

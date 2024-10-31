@@ -11,7 +11,6 @@ const SCOPES = [
   'https://www.googleapis.com/auth/forms.body.readonly',
 ];
 
-// Read filenames from .env
 const CREDENTIALS_PATH = path.join(process.cwd(), process.env.CREDENTIALS_FILENAME || 'credentials.json');
 const RESPONSE_TRACK_FILE = path.join(process.cwd(), process.env.RESPONSE_TRACK_FILENAME || 'responses.json');
 const ERROR_LOG_FILE = process.env.ERROR_LOG_FILENAME || 'error.log';
@@ -19,11 +18,7 @@ const COMBINED_LOG_FILE = process.env.COMBINED_LOG_FILENAME || 'combined.log';
 const CHECK_INTERVAL = (parseInt(process.env.CHECK_INTERVAL) || 86400) * 1000;
 const PROJECT_NAME_KEYS = JSON.parse(process.env.PROJECT_NAME_KEYS || '["name of your project"]');
 const RESPONSE_URL = process.env.RESPONSE_URL;
-
-// Parse the FORM_FORUM_MAPPING environment variable
-const formForumMapping = JSON.parse(process.env.FORM_FORUM_MAPPING || '{}');
-
-// Get admin role ID from environment variable
+const FORM_FORUM_MAPPING = JSON.parse(process.env.FORM_FORUM_MAPPING || '{}');
 const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID;
 
 const discordClient = new Client({
@@ -187,9 +182,11 @@ function truncateCost(value) {
       truncateIndex--;
     }
     // If we couldn't find a good break point, just use 20
-    if (truncateIndex === 0) truncateIndex = 20;
+    if (truncateIndex === 0) {
+      truncateIndex = 20;
+    }
     
-    trimmedValue = trimmedValue.substring(0, truncateIndex) + '...';
+    trimmedValue = `${trimmedValue.substring(0, truncateIndex)  }...`;
   }
   
   return trimmedValue;
@@ -223,7 +220,7 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
   let initialMessage = '';
 
   try {
-    const forumMapping = formForumMapping[formId];
+    const forumMapping = FORM_FORUM_MAPPING[formId];
     let forumId, customForumName, tagName;
 
     if (Array.isArray(forumMapping)) {
@@ -287,7 +284,7 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
       message: {
         content: initialMessage.trim(),
         flags: 1 << 2, // This sets the SUPPRESS_EMBEDS flag
-        components
+        components,
       },
       appliedTags,
       autoArchiveDuration: 10080, // Set to maximum value (7 days)
@@ -299,7 +296,7 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
     for (const question of remainingQuestions) {
       await thread.send({ 
         content: question,
-        flags: 1 << 2
+        flags: 1 << 2,
       });
     }
 
@@ -471,7 +468,7 @@ function formatResponseMessage(response) {
         if (lowerKey.includes('website')) {
           let url = value;
           if (!url.match(/^https?:\/\//i)) {
-            url = 'https://' + url;
+            url = `https://${  url}`;
           }
           buttons.push(
             new ButtonBuilder()
@@ -548,7 +545,7 @@ async function main() {
 
       // Log forum mappings with forum names and tags
       const forumMappingsWithNames = {};
-      for (const [formId, mapping] of Object.entries(formForumMapping)) {
+      for (const [formId, mapping] of Object.entries(FORM_FORUM_MAPPING)) {
         try {
           let forumId, customName, tagName;
           if (Array.isArray(mapping)) {
@@ -585,7 +582,7 @@ async function main() {
     await discordClient.login(process.env.DISCORD_BOT_TOKEN);
 
     while (true) {
-      for (const formId of Object.keys(formForumMapping)) {
+      for (const formId of Object.keys(FORM_FORUM_MAPPING)) {
         try {
           await checkNewResponses(auth, formId, responseTrack);
         } catch (error) {
