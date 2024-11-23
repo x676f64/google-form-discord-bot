@@ -535,7 +535,9 @@ function isValidUrl(urlString) {
 
 function formatResponseMessage(response, responseUrl) {
   let message = '';
-  const buttons = [];
+  const navigationButtons = []; // For website and spreadsheet
+  const winningOfferButtons = []; // For winning offers
+  const otherOfferButtons = []; // For other offers
 
   Object.entries(response).forEach(([key, value]) => {
     if (value && key !== 'Submitted') {
@@ -549,10 +551,10 @@ function formatResponseMessage(response, responseUrl) {
           }
           try {
             new URL(url); // Will throw if invalid
-            buttons.push(
+            navigationButtons.push(
               new ButtonBuilder()
                 .setStyle(ButtonStyle.Link)
-                .setLabel('Website')
+                .setLabel('🌐 Website')
                 .setURL(url)
             );
           } catch (error) {
@@ -570,16 +572,19 @@ function formatResponseMessage(response, responseUrl) {
               // Create prefix based on whether it's a winning offer
               const prefix = isWinningOffer ? '🏆 ' : '📄 ';
               
-              // Format the label with prefix
-              const baseLabel = fileName.length > 15 ? `${fileName}` : fileName;
-              const label = `${prefix}${baseLabel}`;
+              const label = `${prefix}${fileName}`;
               
-              buttons.push(
-                new ButtonBuilder()
-                  .setStyle(ButtonStyle.Link)
-                  .setLabel(label)
-                  .setURL(fileUrl)
-              );
+              const button = new ButtonBuilder()
+                .setStyle(ButtonStyle.Link)
+                .setLabel(label)
+                .setURL(fileUrl);
+
+              // Push to appropriate array based on whether it's a winning offer
+              if (isWinningOffer) {
+                winningOfferButtons.push(button);
+              } else {
+                otherOfferButtons.push(button);
+              }
             } catch (error) {
               logger.warn(`Skipping invalid file URL for ${fileName}: ${fileUrl}`);
             }
@@ -592,20 +597,34 @@ function formatResponseMessage(response, responseUrl) {
     }
   });
 
+  // Add spreadsheet button to navigation buttons
   if (responseUrl) {
-    buttons.push(
+    navigationButtons.push(
       new ButtonBuilder()
         .setStyle(ButtonStyle.Link)
-        .setLabel('Spreadsheet')
+        .setLabel('📑 Spreadsheet')
         .setURL(responseUrl)
     );
   }
 
   const actionRows = [];
-  for (let i = 0; i < buttons.length; i += 5) {
-    const row = new ActionRowBuilder()
-      .addComponents(buttons.slice(i, i + 5));
-    actionRows.push(row);
+  
+  // First row: Navigation buttons (Website and Spreadsheet)
+  if (navigationButtons.length > 0) {
+    actionRows.push(
+      new ActionRowBuilder().addComponents(navigationButtons)
+    );
+  }
+
+  // Second row: Offers (Winning offers first, then other offers)
+  const allOfferButtons = [...winningOfferButtons, ...otherOfferButtons];
+  if (allOfferButtons.length > 0) {
+    // Split into rows of 5 if needed
+    for (let i = 0; i < allOfferButtons.length; i += 5) {
+      actionRows.push(
+        new ActionRowBuilder().addComponents(allOfferButtons.slice(i, i + 5))
+      );
+    }
   }
 
   return { content: message.trim(), components: actionRows };
