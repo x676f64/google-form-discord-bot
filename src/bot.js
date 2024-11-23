@@ -17,7 +17,6 @@ const ERROR_LOG_FILE = process.env.ERROR_LOG_FILENAME || 'error.log';
 const COMBINED_LOG_FILE = process.env.COMBINED_LOG_FILENAME || 'combined.log';
 const CHECK_INTERVAL = (parseInt(process.env.CHECK_INTERVAL) || 86400) * 1000;
 const PROJECT_NAME_KEYS = JSON.parse(process.env.PROJECT_NAME_KEYS || '["name of your project"]');
-const RESPONSE_URL = process.env.RESPONSE_URL;
 const FORM_FORUM_MAPPING = JSON.parse(process.env.FORM_FORUM_MAPPING || '{}');
 const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID;
 
@@ -102,13 +101,13 @@ function splitIntoQuestions(message) {
   return message.split('## ').filter(q => q.trim() !== '').map(q => `### ${  q.trim()}`);
 }
 
-function createButton() {
+function createButton(responseUrl) {
   return new ActionRowBuilder()
     .addComponents(
       new ButtonBuilder()
         .setStyle(ButtonStyle.Link)
         .setLabel('View Full Response')
-        .setURL(RESPONSE_URL),
+        .setURL(responseUrl),
     );
 }
 
@@ -221,10 +220,10 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
 
   try {
     const forumMapping = FORM_FORUM_MAPPING[formId];
-    let forumId, customForumName, tagName;
+    let forumId, customForumName, tagName, responseUrl;
 
     if (Array.isArray(forumMapping)) {
-      [forumId, customForumName] = forumMapping;
+      [forumId, customForumName, responseUrl] = forumMapping;
       tagName = customForumName;
     } else {
       forumId = forumMapping;
@@ -234,6 +233,12 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
 
     if (!forumId) {
       logger.error(`No forum ID mapped for form ID ${formId}`);
+      return false;
+    }
+  
+
+    if (!responseUrl) {
+      logger.error(`No response URL provided for form ID ${formId}`);
       return false;
     }
 
@@ -253,7 +258,7 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
       `${formattedResponse.Submitted} - ${projectName} - ${totalCost}`,
       100,
     );
-    const formattedMessage = formatResponseMessage(formattedResponse);
+    const formattedMessage = formatResponseMessage(formattedResponse, responseUrl);
     const message = formattedMessage.content;
     const components = formattedMessage.components;
 
@@ -268,7 +273,7 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
     const questions = splitIntoQuestions(message);
 
     const remainingQuestions = [];
-    const maxLength = 2000 - JSON.stringify(createButton()).length;
+    const maxLength = 2000 - JSON.stringify(createButton(responseUrl)).length;
 
     for (const question of questions) {
       if (initialMessage.length + question.length <= maxLength) {
@@ -456,7 +461,7 @@ function formatStringWithSubstrateAddresses(str) {
   });
 }
 
-function formatResponseMessage(response) {
+function formatResponseMessage(response, responseUrl) {
   let message = '';
   const buttons = [];
 
@@ -492,17 +497,23 @@ function formatResponseMessage(response) {
     }
   });
 
-  // Add the "View Full Response" button
-  buttons.push(
-    new ButtonBuilder()
-      .setStyle(ButtonStyle.Link)
-      .setLabel('Spreadsheet')
-      .setURL(RESPONSE_URL),
-  );
+  if (responseUrl) {
+    buttons.push(
+      new ButtonBuilder()
+        .setStyle(ButtonStyle.Link)
+        .setLabel('Spreadsheet')
+        .setURL(responseUrl)
+    );
+  }
 
-  // Create a single ActionRow with all buttons
-  const components = buttons.length > 0 ? [new ActionRowBuilder().addComponents(buttons)] : [];
-  return { content: message.trim(), components };
+  const actionRows = [];
+  for (let i = 0; i < buttons.length; i += 5) {
+    const row = new ActionRowBuilder()
+      .addComponents(buttons.slice(i, i + 5));
+    actionRows.push(row);
+  }
+
+  return { content: message.trim(), components: actionRows };
 }
 
 function handleApiError(error, context) {
