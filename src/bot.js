@@ -1,5 +1,6 @@
 require('dotenv').config();
 const fs = require('fs').promises;
+const { createWriteStream } = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
 const { Client, GatewayIntentBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
@@ -9,6 +10,7 @@ const { decodeAddress, encodeAddress } = require('@polkadot/util-crypto');
 const SCOPES = [
   'https://www.googleapis.com/auth/forms.responses.readonly',
   'https://www.googleapis.com/auth/forms.body.readonly',
+  'https://www.googleapis.com/auth/drive.readonly',
 ];
 
 const CREDENTIALS_PATH = path.join(process.cwd(), process.env.CREDENTIALS_FILENAME || 'credentials.json');
@@ -17,7 +19,12 @@ const ERROR_LOG_FILE = process.env.ERROR_LOG_FILENAME || 'error.log';
 const COMBINED_LOG_FILE = process.env.COMBINED_LOG_FILENAME || 'combined.log';
 const CHECK_INTERVAL = (parseInt(process.env.CHECK_INTERVAL) || 86400) * 1000;
 const PROJECT_NAME_KEYS = JSON.parse(process.env.PROJECT_NAME_KEYS || '["name of your project"]');
+const OFFERS_DIR = path.join(process.cwd(), 'offers');
+
+// Parse the FORM_FORUM_MAPPING environment variable
 const FORM_FORUM_MAPPING = JSON.parse(process.env.FORM_FORUM_MAPPING || '{}');
+
+// Get admin role ID from environment variable
 const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID;
 
 const discordClient = new Client({
@@ -65,8 +72,6 @@ async function getFormDetails(auth, formId) {
   }
 }
 
-
-
 async function getAdminRole(guild) {
   if (!ADMIN_ROLE_ID) {
     logger.warn('No admin role ID or name provided. Admin role tagging will be skipped.');
@@ -96,6 +101,28 @@ async function getAdminRole(guild) {
     return null;
   }
 }
+
+async function downloadFile(auth, fileId, fileName) {
+  const drive = google.drive({ version: 'v3', auth });
+  
+  // Create offers directory if it doesn't exist
+  await fs.mkdir(OFFERS_DIR, { recursive: true });
+  
+  // Download the file
+  const dest = createWriteStream(path.join(OFFERS_DIR, fileName));
+  const response = await drive.files.get(
+    { fileId: fileId, alt: 'media' },
+    { responseType: 'stream' }
+  );
+  
+  response.data.pipe(dest);
+  
+  return new Promise((resolve, reject) => {
+    dest.on('finish', resolve);
+    dest.on('error', reject);
+  });
+}
+
 
 function splitIntoQuestions(message) {
   return message.split('## ').filter(q => q.trim() !== '').map(q => `### ${  q.trim()}`);
@@ -368,7 +395,7 @@ async function checkNewResponses(auth, formId, responseTrack) {
       newResponses.sort((a, b) => new Date(a.lastSubmittedTime) - new Date(b.lastSubmittedTime));
 
       for (const response of newResponses) {
-        const formattedResponse = formatResponse(response, formDetails);
+        const formattedResponse = await formatResponse(response, formDetails, auth);
         const threadCreated = await sendToDiscord(formattedResponse, formId, responseTrack);
 
         if (!threadCreated) {
@@ -388,7 +415,12 @@ async function checkNewResponses(auth, formId, responseTrack) {
 }
 
 
-function formatResponse(response, formDetails) {
+function sanitizeFileName(name) {
+  return name.replace(/[^a-zA-Z0-9-_.]/g, '_');
+}
+
+
+async function formatResponse(response, formDetails, auth) {
   const questions = formDetails
     ? formDetails.items.reduce((acc, item) => {
       if (item.questionItem && item.questionItem.question) {
@@ -398,43 +430,73 @@ function formatResponse(response, formDetails) {
     }, {})
     : {};
 
+  // Initialize formatted response with submission date
   const formattedResponse = {
-    Submitted: response.lastSubmittedTime.split('T')[0], // This will give us just the date part
+    Submitted: response.lastSubmittedTime.split('T')[0],
   };
 
-  Object.entries(response.answers).forEach(([questionId, answer]) => {
-    let answerValue = '';
-    if (answer.textAnswers) {
-      answerValue = answer.textAnswers.answers.map((a) => a.value).join(', ');
-    } else if (answer.fileUploadAnswers) {
-      answerValue = answer.fileUploadAnswers.answers
-        .map((a) => {
-          const fileId = a.fileId;
-          const fileName = a.fileName;
-          const fileUrl = `https://drive.google.com/open?id=${fileId}`;
-          logger.debug(`Processing file upload: ${fileName} (ID: ${fileId})`);
-          return `[${fileName}](${fileUrl})`;
-        })
-        .join(', ');
-    } else if (answer.scaleAnswers) {
-      answerValue = answer.scaleAnswers.answers.map((a) => a.value).join(', ');
-    } else if (answer.dateAnswers) {
-      answerValue = answer.dateAnswers.answers
-        .map((a) => `${a.year}-${a.month}-${a.day}`)
-        .join(', ');
-    } else if (answer.timeAnswers) {
-      answerValue = answer.timeAnswers.answers
-        .map((a) => `${a.hours}:${a.minutes}:${a.seconds}`)
-        .join(', ');
-    } else if (answer.choiceAnswers) {
-      answerValue = answer.choiceAnswers.answers.map((a) => a.value).join(', ');
-    } else {
-      answerValue = 'Unsupported answer type';
+  // First pass: Format all non-file answers
+  for (const [questionId, answer] of Object.entries(response.answers)) {
+    if (!answer.fileUploadAnswers) {
+      const questionText = questions[questionId] || `Question ${questionId}`;
+      try {
+        if (answer.textAnswers) {
+          formattedResponse[questionText] = answer.textAnswers.answers.map((a) => a.value).join(', ');
+        } else if (answer.scaleAnswers) {
+          formattedResponse[questionText] = answer.scaleAnswers.answers.map((a) => a.value).join(', ');
+        } else if (answer.dateAnswers) {
+          formattedResponse[questionText] = answer.dateAnswers.answers
+            .map((a) => `${a.year}-${a.month}-${a.day}`)
+            .join(', ');
+        } else if (answer.timeAnswers) {
+          formattedResponse[questionText] = answer.timeAnswers.answers
+            .map((a) => `${a.hours}:${a.minutes}:${a.seconds}`)
+            .join(', ');
+        } else if (answer.choiceAnswers) {
+          formattedResponse[questionText] = answer.choiceAnswers.answers.map((a) => a.value).join(', ');
+        } else {
+          formattedResponse[questionText] = 'Unsupported answer type';
+        }
+      } catch (error) {
+        logger.error(`Error processing answer for question "${questionText}": ${error.message}`);
+        formattedResponse[questionText] = 'Error processing answer';
+      }
     }
+  }
 
-    const questionText = questions[questionId] || `Question ${questionId}`;
-    formattedResponse[questionText] = answerValue;
-  });
+  // Get project name from formatted responses
+  const projectName = sanitizeFileName(getProjectName(formattedResponse));
+
+  // Second pass: Handle file uploads
+  for (const [questionId, answer] of Object.entries(response.answers)) {
+    if (answer.fileUploadAnswers) {
+      const questionText = questions[questionId] || `Question ${questionId}`;
+      try {
+        const fileAnswers = {};
+        for (const fileAnswer of answer.fileUploadAnswers.answers) {
+          const originalFileName = sanitizeFileName(fileAnswer.fileName);
+          const storageFileName = `${projectName}-${originalFileName}`;
+          const fileUrl = `https://drive.google.com/open?id=${fileAnswer.fileId}`;
+          
+          if (isValidUrl(fileUrl)) {
+            try {
+              await downloadFile(auth, fileAnswer.fileId, storageFileName);
+              logger.info(`Downloaded ${storageFileName}`);
+              fileAnswers[originalFileName] = fileUrl;
+            } catch (err) {
+              logger.error(`Error downloading ${storageFileName}: ${err}`);
+            }
+          } else {
+            logger.error(`Invalid file URL generated for ${originalFileName}: ${fileUrl}`);
+          }
+        }
+        formattedResponse[questionText] = fileAnswers;
+      } catch (error) {
+        logger.error(`Error processing file upload for question "${questionText}": ${error.message}`);
+        formattedResponse[questionText] = 'Error processing file upload';
+      }
+    }
+  }
 
   return formattedResponse;
 }
@@ -461,6 +523,16 @@ function formatStringWithSubstrateAddresses(str) {
   });
 }
 
+function isValidUrl(urlString) {
+  try {
+    const url = new URL(urlString);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+
 function formatResponseMessage(response, responseUrl) {
   let message = '';
   const buttons = [];
@@ -471,27 +543,50 @@ function formatResponseMessage(response, responseUrl) {
       
       if (!PROJECT_NAME_KEYS.some(nameKey => lowerKey.includes(nameKey.toLowerCase()))) {
         if (lowerKey.includes('website')) {
-          let url = value;
-          if (!url.match(/^https?:\/\//i)) {
-            url = `https://${  url}`;
+          let url = value.trim();
+          if (!url.startsWith('https://')) {
+            url = 'https://' + url.replace(/^http:\/\//i, '');
           }
-          buttons.push(
-            new ButtonBuilder()
-              .setStyle(ButtonStyle.Link)
-              .setLabel('Website')
-              .setURL(url),
-          );
-        } else if (value.startsWith('[') && value.includes('](https://drive.google.com/open?id=')) {
-          const [fileName, fileUrl] = value.slice(1, -1).split('](');
-          buttons.push(
-            new ButtonBuilder()
-              .setStyle(ButtonStyle.Link)
-              .setLabel(`${fileName.length > 20 ? `${fileName.substring(0, 17)  }...` : fileName}`)
-              .setURL(fileUrl),
-          );
+          try {
+            new URL(url); // Will throw if invalid
+            buttons.push(
+              new ButtonBuilder()
+                .setStyle(ButtonStyle.Link)
+                .setLabel('Website')
+                .setURL(url)
+            );
+          } catch (error) {
+            logger.warn(`Skipping invalid website URL: ${url}`);
+          }
+        } else if (typeof value === 'object' && !Array.isArray(value)) {
+          // Handle file attachments
+          Object.entries(value).forEach(([fileName, fileUrl]) => {
+            try {
+              new URL(fileUrl); // Validate URL
+              
+              // Determine if this is a winning offer based on the question key
+              const isWinningOffer = lowerKey.includes('winning');
+              
+              // Create prefix based on whether it's a winning offer
+              const prefix = isWinningOffer ? '🏆 ' : '📄 ';
+              
+              // Format the label with prefix
+              const baseLabel = fileName.length > 15 ? `${fileName}` : fileName;
+              const label = `${prefix}${baseLabel}`;
+              
+              buttons.push(
+                new ButtonBuilder()
+                  .setStyle(ButtonStyle.Link)
+                  .setLabel(label)
+                  .setURL(fileUrl)
+              );
+            } catch (error) {
+              logger.warn(`Skipping invalid file URL for ${fileName}: ${fileUrl}`);
+            }
+          });
         } else {
           message += `## ${key}\n`;
-          message += `${formatStringWithSubstrateAddresses(value)}\n\n`;
+          message += `${formatStringWithSubstrateAddresses(value.toString())}\n\n`;
         }
       }
     }
