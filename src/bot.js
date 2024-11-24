@@ -479,13 +479,22 @@ async function formatResponse(response, formDetails, auth) {
           const storageFileName = `${projectName}-${originalFileName}`;
           const fileUrl = `https://drive.google.com/open?id=${fileAnswer.fileId}`;
           
-          if (DOWNLOAD_FILES && isValidUrl(fileUrl)) {
-            try {
-              await downloadFile(auth, fileAnswer.fileId, storageFileName);
-              logger.info(`Downloaded ${storageFileName}`);
-            } catch (err) {
-              logger.error(`Error downloading ${storageFileName}: ${err}`);
+          if (isValidUrl(fileUrl)) {
+            // Always store the URL reference regardless of download setting
+            fileAnswers[originalFileName] = fileUrl;
+            
+            if (DOWNLOAD_FILES) {
+              try {
+                await downloadFile(auth, fileAnswer.fileId, storageFileName);
+                logger.info(`Downloaded ${storageFileName}`);
+              } catch (err) {
+                logger.error(`Error downloading ${storageFileName}: ${err}`);
+              }
+            } else {
+              logger.debug(`File download skipped (DOWNLOAD_FILES not enabled): ${storageFileName}`);
             }
+          } else {
+            logger.error(`Invalid file URL generated for ${originalFileName}: ${fileUrl}`);
           }
         }
         formattedResponse[questionText] = fileAnswers;
