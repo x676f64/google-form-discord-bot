@@ -19,6 +19,7 @@ const ERROR_LOG_FILE = process.env.ERROR_LOG_FILENAME || 'error.log';
 const COMBINED_LOG_FILE = process.env.COMBINED_LOG_FILENAME || 'combined.log';
 const CHECK_INTERVAL = (parseInt(process.env.CHECK_INTERVAL) || 86400) * 1000;
 const PROJECT_NAME_KEYS = JSON.parse(process.env.PROJECT_NAME_KEYS || '["name of your project"]');
+const DOWNLOAD_FILES = process.env.DOWNLOAD_FILES === 'true';
 const OFFERS_DIR = path.join(process.cwd(), 'offers');
 
 // Parse the FORM_FORUM_MAPPING environment variable
@@ -478,16 +479,13 @@ async function formatResponse(response, formDetails, auth) {
           const storageFileName = `${projectName}-${originalFileName}`;
           const fileUrl = `https://drive.google.com/open?id=${fileAnswer.fileId}`;
           
-          if (isValidUrl(fileUrl)) {
+          if (DOWNLOAD_FILES && isValidUrl(fileUrl)) {
             try {
               await downloadFile(auth, fileAnswer.fileId, storageFileName);
               logger.info(`Downloaded ${storageFileName}`);
-              fileAnswers[originalFileName] = fileUrl;
             } catch (err) {
               logger.error(`Error downloading ${storageFileName}: ${err}`);
             }
-          } else {
-            logger.error(`Invalid file URL generated for ${originalFileName}: ${fileUrl}`);
           }
         }
         formattedResponse[questionText] = fileAnswers;
