@@ -385,8 +385,9 @@ async function checkNewResponses(auth, formId, responseTrack) {
     }
 
     const trackedResponses = responseTrack[formId] || [];
+    // Use responseId for comparison instead of submission date
     const newResponses = responses.filter(
-      (r) => !trackedResponses.some((tr) => tr.Submitted === r.lastSubmittedTime.split('T')[0]),
+      (r) => !trackedResponses.some((tr) => tr.responseId === r.responseId)
     );
 
     if (newResponses.length > 0) {
@@ -400,7 +401,7 @@ async function checkNewResponses(auth, formId, responseTrack) {
         const threadCreated = await sendToDiscord(formattedResponse, formId, responseTrack);
 
         if (!threadCreated) {
-          logger.warn(`Failed to create thread for response submitted on ${formattedResponse.Submitted}`);
+          logger.warn(`Failed to create thread for response ${formattedResponse.responseId} submitted on ${formattedResponse.Submitted}`);
         }
       }
 
@@ -433,6 +434,7 @@ async function formatResponse(response, formDetails, auth) {
 
   // Initialize formatted response with submission date
   const formattedResponse = {
+    responseId: response.responseId,
     Submitted: response.lastSubmittedTime.split('T')[0],
   };
 
@@ -546,60 +548,66 @@ function formatResponseMessage(response, responseUrl) {
   const winningOfferButtons = []; // For winning offers
   const otherOfferButtons = []; // For other offers
 
-  Object.entries(response).forEach(([key, value]) => {
-    if (value && key !== 'Submitted') {
-      const lowerKey = key.toLowerCase();
-      
-      if (!PROJECT_NAME_KEYS.some(nameKey => lowerKey.includes(nameKey.toLowerCase()))) {
-        if (lowerKey.includes('website')) {
-          let url = value.trim();
-          if (!url.startsWith('https://')) {
-            url = 'https://' + url.replace(/^http:\/\//i, '');
-          }
-          try {
-            new URL(url); // Will throw if invalid
-            navigationButtons.push(
-              new ButtonBuilder()
-                .setStyle(ButtonStyle.Link)
-                .setLabel('🌐 Website')
-                .setURL(url)
-            );
-          } catch (error) {
-            logger.warn(`Skipping invalid website URL: ${url}`);
-          }
-        } else if (typeof value === 'object' && !Array.isArray(value)) {
-          // Handle file attachments
-          Object.entries(value).forEach(([fileName, fileUrl]) => {
-            try {
-              new URL(fileUrl); // Validate URL
-              
-              // Determine if this is a winning offer based on the question key
-              const isWinningOffer = lowerKey.includes('winning');
-              
-              // Create prefix based on whether it's a winning offer
-              const prefix = isWinningOffer ? '🏆 ' : '📄 ';
-              
-              const label = `${prefix}${fileName}`;
-              
-              const button = new ButtonBuilder()
-                .setStyle(ButtonStyle.Link)
-                .setLabel(label)
-                .setURL(fileUrl);
+  // Separate entries into name-related and other
+  const entries = Object.entries(response)
+    .filter(([key, value]) => value && key !== 'Submitted' && key !== 'responseId');
+  
+  // Sort entries to put "name" fields first
+  const sortedEntries = entries.sort((a, b) => {
+    const aIsName = a[0].toLowerCase().includes('name');
+    const bIsName = b[0].toLowerCase().includes('name');
+    
+    if (aIsName && !bIsName) return -1;
+    if (!aIsName && bIsName) return 1;
+    return 0;
+  });
 
-              // Push to appropriate array based on whether it's a winning offer
-              if (isWinningOffer) {
-                winningOfferButtons.push(button);
-              } else {
-                otherOfferButtons.push(button);
-              }
-            } catch (error) {
-              logger.warn(`Skipping invalid file URL for ${fileName}: ${fileUrl}`);
-            }
-          });
-        } else {
-          message += `## ${key}\n`;
-          message += `${formatStringWithSubstrateAddresses(value.toString())}\n\n`;
+  sortedEntries.forEach(([key, value]) => {
+    const lowerKey = key.toLowerCase();
+    
+    if (!PROJECT_NAME_KEYS.some(nameKey => lowerKey.includes(nameKey.toLowerCase()))) {
+      if (lowerKey.includes('website')) {
+        let url = value.trim();
+        if (!url.startsWith('https://')) {
+          url = 'https://' + url.replace(/^http:\/\//i, '');
         }
+        try {
+          new URL(url); // Will throw if invalid
+          navigationButtons.push(
+            new ButtonBuilder()
+              .setStyle(ButtonStyle.Link)
+              .setLabel('🌐 Website')
+              .setURL(url)
+          );
+        } catch (error) {
+          logger.warn(`Skipping invalid website URL: ${url}`);
+        }
+      } else if (typeof value === 'object' && !Array.isArray(value)) {
+        // Handle file attachments
+        Object.entries(value).forEach(([fileName, fileUrl]) => {
+          try {
+            new URL(fileUrl); // Validate URL
+            const isWinningOffer = lowerKey.includes('winning');
+            const prefix = isWinningOffer ? '🏆 ' : '📄 ';
+            const label = `${prefix}${fileName}`;
+            
+            const button = new ButtonBuilder()
+              .setStyle(ButtonStyle.Link)
+              .setLabel(label)
+              .setURL(fileUrl);
+
+            if (isWinningOffer) {
+              winningOfferButtons.push(button);
+            } else {
+              otherOfferButtons.push(button);
+            }
+          } catch (error) {
+            logger.warn(`Skipping invalid file URL for ${fileName}: ${fileUrl}`);
+          }
+        });
+      } else {
+        message += `## ${key}\n`;
+        message += `${formatStringWithSubstrateAddresses(value.toString())}\n\n`;
       }
     }
   });
@@ -626,7 +634,6 @@ function formatResponseMessage(response, responseUrl) {
   // Second row: Offers (Winning offers first, then other offers)
   const allOfferButtons = [...winningOfferButtons, ...otherOfferButtons];
   if (allOfferButtons.length > 0) {
-    // Split into rows of 5 if needed
     for (let i = 0; i < allOfferButtons.length; i += 5) {
       actionRows.push(
         new ActionRowBuilder().addComponents(allOfferButtons.slice(i, i + 5))
