@@ -423,86 +423,57 @@ function sanitizeFileName(name) {
 
 
 async function formatResponse(response, formDetails, auth) {
-  const questions = formDetails
-    ? formDetails.items.reduce((acc, item) => {
-      if (item.questionItem && item.questionItem.question) {
-        acc[item.questionItem.question.questionId] = item.title;
-      }
-      return acc;
-    }, {})
-    : {};
+  if (!formDetails || !Array.isArray(formDetails.items)) {
+    throw new Error('Form details are required but missing or invalid');
+  }
 
-  // Initialize formatted response with submission date
+  // Create formatted response starting with metadata
   const formattedResponse = {
     responseId: response.responseId,
-    Submitted: response.lastSubmittedTime.split('T')[0],
+    Submitted: response.lastSubmittedTime.split('T')[0]
   };
 
-  // First pass: Format all non-file answers
+  // Create answers map for quick lookup
+  const answersMap = {};
   for (const [questionId, answer] of Object.entries(response.answers)) {
-    if (!answer.fileUploadAnswers) {
-      const questionText = questions[questionId] || `Question ${questionId}`;
+    answersMap[questionId] = answer;
+  }
+
+  // Process questions in form order
+  for (const item of formDetails.items) {
+    if (item.questionItem && item.questionItem.question) {
+      const questionId = item.questionItem.question.questionId;
+      const answer = answersMap[questionId];
+      const questionText = item.title;
+
+      if (!answer) continue;  // Skip if no answer for this question
+
       try {
-        if (answer.textAnswers) {
-          formattedResponse[questionText] = answer.textAnswers.answers.map((a) => a.value).join(', ');
+        if (answer.fileUploadAnswers) {
+          const fileAnswers = {};
+          for (const fileAnswer of answer.fileUploadAnswers.answers) {
+            const originalFileName = sanitizeFileName(fileAnswer.fileName);
+            fileAnswers[originalFileName] = `https://drive.google.com/open?id=${fileAnswer.fileId}`;
+          }
+          formattedResponse[questionText] = fileAnswers;
+        } else if (answer.textAnswers) {
+          formattedResponse[questionText] = answer.textAnswers.answers.map(a => a.value).join(', ');
         } else if (answer.scaleAnswers) {
-          formattedResponse[questionText] = answer.scaleAnswers.answers.map((a) => a.value).join(', ');
+          formattedResponse[questionText] = answer.scaleAnswers.answers.map(a => a.value).join(', ');
         } else if (answer.dateAnswers) {
           formattedResponse[questionText] = answer.dateAnswers.answers
-            .map((a) => `${a.year}-${a.month}-${a.day}`)
+            .map(a => `${a.year}-${a.month}-${a.day}`)
             .join(', ');
         } else if (answer.timeAnswers) {
           formattedResponse[questionText] = answer.timeAnswers.answers
-            .map((a) => `${a.hours}:${a.minutes}:${a.seconds}`)
+            .map(a => `${a.hours}:${a.minutes}:${a.seconds}`)
             .join(', ');
         } else if (answer.choiceAnswers) {
-          formattedResponse[questionText] = answer.choiceAnswers.answers.map((a) => a.value).join(', ');
-        } else {
-          formattedResponse[questionText] = 'Unsupported answer type';
+          formattedResponse[questionText] = answer.choiceAnswers.answers.map(a => a.value).join(', ');
         }
       } catch (error) {
         logger.error(`Error processing answer for question "${questionText}": ${error.message}`);
         formattedResponse[questionText] = 'Error processing answer';
-      }
-    }
-  }
-
-  // Get project name from formatted responses
-  const projectName = sanitizeFileName(getProjectName(formattedResponse));
-
-  // Second pass: Handle file uploads
-  for (const [questionId, answer] of Object.entries(response.answers)) {
-    if (answer.fileUploadAnswers) {
-      const questionText = questions[questionId] || `Question ${questionId}`;
-      try {
-        const fileAnswers = {};
-        for (const fileAnswer of answer.fileUploadAnswers.answers) {
-          const originalFileName = sanitizeFileName(fileAnswer.fileName);
-          const storageFileName = `${projectName}-${originalFileName}`;
-          const fileUrl = `https://drive.google.com/open?id=${fileAnswer.fileId}`;
-          
-          if (isValidUrl(fileUrl)) {
-            // Always store the URL reference regardless of download setting
-            fileAnswers[originalFileName] = fileUrl;
-            
-            if (DOWNLOAD_FILES) {
-              try {
-                await downloadFile(auth, fileAnswer.fileId, storageFileName);
-                logger.info(`Downloaded ${storageFileName}`);
-              } catch (err) {
-                logger.error(`Error downloading ${storageFileName}: ${err}`);
-              }
-            } else {
-              logger.debug(`File download skipped (DOWNLOAD_FILES not enabled): ${storageFileName}`);
-            }
-          } else {
-            logger.error(`Invalid file URL generated for ${originalFileName}: ${fileUrl}`);
-          }
-        }
-        formattedResponse[questionText] = fileAnswers;
-      } catch (error) {
-        logger.error(`Error processing file upload for question "${questionText}": ${error.message}`);
-        formattedResponse[questionText] = 'Error processing file upload';
       }
     }
   }
