@@ -10,7 +10,7 @@ const { decodeAddress, encodeAddress } = require('@polkadot/util-crypto');
 const SCOPES = [
   'https://www.googleapis.com/auth/forms.responses.readonly',
   'https://www.googleapis.com/auth/forms.body.readonly',
-  'https://www.googleapis.com/auth/drive.readonly',
+//  'https://www.googleapis.com/auth/drive.readonly',
 ];
 
 const CREDENTIALS_PATH = path.join(process.cwd(), process.env.CREDENTIALS_FILENAME || 'credentials.json');
