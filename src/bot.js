@@ -1,6 +1,5 @@
 require("dotenv").config();
 const fs = require("fs").promises;
-const { createWriteStream } = require("fs");
 const path = require("path");
 const { google } = require("googleapis");
 const {
@@ -34,8 +33,6 @@ const CHECK_INTERVAL = (parseInt(process.env.CHECK_INTERVAL) || 86400) * 1000;
 const PROJECT_NAME_KEYS = JSON.parse(
   process.env.PROJECT_NAME_KEYS || '["name of your project"]'
 );
-const DOWNLOAD_FILES = process.env.DOWNLOAD_FILES === "true";
-const OFFERS_DIR = path.join(process.cwd(), "offers");
 
 // Parse the FORM_FORUM_MAPPING environment variable
 const FORM_FORUM_MAPPING = JSON.parse(process.env.FORM_FORUM_MAPPING || "{}");
@@ -120,27 +117,6 @@ async function getAdminRole(guild) {
     logger.error(`Error fetching admin role: ${error.message}`);
     return null;
   }
-}
-
-async function downloadFile(auth, fileId, fileName) {
-  const drive = google.drive({ version: "v3", auth });
-
-  // Create offers directory if it doesn't exist
-  await fs.mkdir(OFFERS_DIR, { recursive: true });
-
-  // Download the file
-  const dest = createWriteStream(path.join(OFFERS_DIR, fileName));
-  const response = await drive.files.get(
-    { fileId: fileId, alt: "media" },
-    { responseType: "stream" }
-  );
-
-  response.data.pipe(dest);
-
-  return new Promise((resolve, reject) => {
-    dest.on("finish", resolve);
-    dest.on("error", reject);
-  });
 }
 
 function splitIntoQuestions(message) {
