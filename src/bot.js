@@ -1,29 +1,44 @@
-require('dotenv').config();
-const fs = require('fs').promises;
-const { createWriteStream } = require('fs');
-const path = require('path');
-const { google } = require('googleapis');
-const { Client, GatewayIntentBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const winston = require('winston');
-const { decodeAddress, encodeAddress } = require('@polkadot/util-crypto');
+require("dotenv").config();
+const fs = require("fs").promises;
+const { createWriteStream } = require("fs");
+const path = require("path");
+const { google } = require("googleapis");
+const {
+  Client,
+  GatewayIntentBits,
+  ChannelType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} = require("discord.js");
+const winston = require("winston");
+const { decodeAddress, encodeAddress } = require("@polkadot/util-crypto");
 
 const SCOPES = [
-  'https://www.googleapis.com/auth/forms.responses.readonly',
-  'https://www.googleapis.com/auth/forms.body.readonly',
-//  'https://www.googleapis.com/auth/drive.readonly',
+  "https://www.googleapis.com/auth/forms.responses.readonly",
+  "https://www.googleapis.com/auth/forms.body.readonly",
+  //  'https://www.googleapis.com/auth/drive.readonly',
 ];
 
-const CREDENTIALS_PATH = path.join(process.cwd(), process.env.CREDENTIALS_FILENAME || 'credentials.json');
-const RESPONSE_TRACK_FILE = path.join(process.cwd(), process.env.RESPONSE_TRACK_FILENAME || 'responses.json');
-const ERROR_LOG_FILE = process.env.ERROR_LOG_FILENAME || 'error.log';
-const COMBINED_LOG_FILE = process.env.COMBINED_LOG_FILENAME || 'combined.log';
+const CREDENTIALS_PATH = path.join(
+  process.cwd(),
+  process.env.CREDENTIALS_FILENAME || "credentials.json"
+);
+const RESPONSE_TRACK_FILE = path.join(
+  process.cwd(),
+  process.env.RESPONSE_TRACK_FILENAME || "responses.json"
+);
+const ERROR_LOG_FILE = process.env.ERROR_LOG_FILENAME || "error.log";
+const COMBINED_LOG_FILE = process.env.COMBINED_LOG_FILENAME || "combined.log";
 const CHECK_INTERVAL = (parseInt(process.env.CHECK_INTERVAL) || 86400) * 1000;
-const PROJECT_NAME_KEYS = JSON.parse(process.env.PROJECT_NAME_KEYS || '["name of your project"]');
-const DOWNLOAD_FILES = process.env.DOWNLOAD_FILES === 'true';
-const OFFERS_DIR = path.join(process.cwd(), 'offers');
+const PROJECT_NAME_KEYS = JSON.parse(
+  process.env.PROJECT_NAME_KEYS || '["name of your project"]'
+);
+const DOWNLOAD_FILES = process.env.DOWNLOAD_FILES === "true";
+const OFFERS_DIR = path.join(process.cwd(), "offers");
 
 // Parse the FORM_FORUM_MAPPING environment variable
-const FORM_FORUM_MAPPING = JSON.parse(process.env.FORM_FORUM_MAPPING || '{}');
+const FORM_FORUM_MAPPING = JSON.parse(process.env.FORM_FORUM_MAPPING || "{}");
 
 // Get admin role ID from environment variable
 const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID;
@@ -34,16 +49,16 @@ const discordClient = new Client({
 
 // Configure logger
 const logger = winston.createLogger({
-  level: 'info',
+  level: "info",
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.printf(({ timestamp, level, message }) => {
       return `${timestamp} ${level}: ${message}`;
-    }),
+    })
   ),
   transports: [
     new winston.transports.Console(),
-    new winston.transports.File({ filename: ERROR_LOG_FILE, level: 'error' }),
+    new winston.transports.File({ filename: ERROR_LOG_FILE, level: "error" }),
     new winston.transports.File({ filename: COMBINED_LOG_FILE }),
   ],
 });
@@ -64,7 +79,7 @@ async function authorize() {
 
 async function getFormDetails(auth, formId) {
   try {
-    const forms = google.forms({ version: 'v1', auth });
+    const forms = google.forms({ version: "v1", auth });
     const response = await forms.forms.get({ formId });
     return response.data;
   } catch (error) {
@@ -75,7 +90,9 @@ async function getFormDetails(auth, formId) {
 
 async function getAdminRole(guild) {
   if (!ADMIN_ROLE_ID) {
-    logger.warn('No admin role ID or name provided. Admin role tagging will be skipped.');
+    logger.warn(
+      "No admin role ID or name provided. Admin role tagging will be skipped."
+    );
     return null;
   }
 
@@ -87,7 +104,9 @@ async function getAdminRole(guild) {
     } else {
       // If it's not numeric, treat it as a name (case-insensitive)
       const lowerCaseRoleName = ADMIN_ROLE_ID.toLowerCase();
-      adminRole = guild.roles.cache.find(role => role.name.toLowerCase() === lowerCaseRoleName);
+      adminRole = guild.roles.cache.find(
+        (role) => role.name.toLowerCase() === lowerCaseRoleName
+      );
     }
 
     if (adminRole) {
@@ -104,53 +123,54 @@ async function getAdminRole(guild) {
 }
 
 async function downloadFile(auth, fileId, fileName) {
-  const drive = google.drive({ version: 'v3', auth });
-  
+  const drive = google.drive({ version: "v3", auth });
+
   // Create offers directory if it doesn't exist
   await fs.mkdir(OFFERS_DIR, { recursive: true });
-  
+
   // Download the file
   const dest = createWriteStream(path.join(OFFERS_DIR, fileName));
   const response = await drive.files.get(
-    { fileId: fileId, alt: 'media' },
-    { responseType: 'stream' }
+    { fileId: fileId, alt: "media" },
+    { responseType: "stream" }
   );
-  
+
   response.data.pipe(dest);
-  
+
   return new Promise((resolve, reject) => {
-    dest.on('finish', resolve);
-    dest.on('error', reject);
+    dest.on("finish", resolve);
+    dest.on("error", reject);
   });
 }
 
-
 function splitIntoQuestions(message) {
-  return message.split('## ').filter(q => q.trim() !== '').map(q => `### ${  q.trim()}`);
+  return message
+    .split("## ")
+    .filter((q) => q.trim() !== "")
+    .map((q) => `### ${q.trim()}`);
 }
 
 function createButton(responseUrl) {
-  return new ActionRowBuilder()
-    .addComponents(
-      new ButtonBuilder()
-        .setStyle(ButtonStyle.Link)
-        .setLabel('View Full Response')
-        .setURL(responseUrl),
-    );
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setStyle(ButtonStyle.Link)
+      .setLabel("View Full Response")
+      .setURL(responseUrl)
+  );
 }
 
 async function loadResponseTrack() {
   try {
-    const data = await fs.readFile(RESPONSE_TRACK_FILE, 'utf8');
+    const data = await fs.readFile(RESPONSE_TRACK_FILE, "utf8");
     return data.trim() ? JSON.parse(data) : {};
   } catch (error) {
-    if (error.code === 'ENOENT') {
-      logger.info('No existing response track found. Creating a new one.');
+    if (error.code === "ENOENT") {
+      logger.info("No existing response track found. Creating a new one.");
       await saveResponseTrack({});
       return {};
     }
     if (error instanceof SyntaxError) {
-      logger.warn('Invalid JSON in response track file. Creating a new one.');
+      logger.warn("Invalid JSON in response track file. Creating a new one.");
       await saveResponseTrack({});
       return {};
     }
@@ -164,7 +184,7 @@ async function saveResponseTrack(track) {
     await fs.writeFile(
       RESPONSE_TRACK_FILE,
       JSON.stringify(track, null, 2),
-      'utf8',
+      "utf8"
     );
     logger.info(`Successfully wrote to ${RESPONSE_TRACK_FILE}`);
   } catch (error) {
@@ -179,62 +199,92 @@ function truncate(str, n) {
 function getProjectName(response) {
   const projectNameKey = Object.keys(response).find((key) =>
     PROJECT_NAME_KEYS.some((searchString) =>
-      key.toLowerCase().includes(searchString.toLowerCase()),
-    ),
+      key.toLowerCase().includes(searchString.toLowerCase())
+    )
   );
-  return projectNameKey ? response[projectNameKey] : 'Unknown Project';
+  return projectNameKey ? response[projectNameKey] : "Unknown Project";
 }
 
 function getTotalCost(response) {
-  const costKeys = ['total cost', 'budget', 'funding amount', 'requested amount'];
+  // Skip cost for audit forms
+  if (
+    Object.keys(response).some(
+      (key) =>
+        key.toLowerCase().includes("audit") ||
+        key.toLowerCase().includes("auditor")
+    )
+  ) {
+    return "";
+  }
+
+  const costKeys = [
+    "total cost",
+    "budget",
+    "funding amount",
+    "requested amount",
+  ];
   for (const [key, value] of Object.entries(response)) {
-    if (costKeys.some(costKey => key.toLowerCase().includes(costKey))) {
+    if (costKeys.some((costKey) => key.toLowerCase().includes(costKey))) {
       // Truncate the value to a reasonable length
       const truncatedValue = truncateCost(value);
       return truncatedValue;
     }
   }
-  return 'Cost not found';
+  return "Cost not found";
 }
 
 function truncateCost(value) {
   // Remove leading/trailing whitespace
   let trimmedValue = value.trim();
-  
+
   // If the value is longer than 20 characters, truncate it
   if (trimmedValue.length > 20) {
     // Try to find a sensible place to truncate
     let truncateIndex = 20;
-    while (truncateIndex > 0 && !/[\s,.]/.test(trimmedValue[truncateIndex - 1])) {
+    while (
+      truncateIndex > 0 &&
+      !/[\s,.]/.test(trimmedValue[truncateIndex - 1])
+    ) {
       truncateIndex--;
     }
     // If we couldn't find a good break point, just use 20
     if (truncateIndex === 0) {
       truncateIndex = 20;
     }
-    
-    trimmedValue = `${trimmedValue.substring(0, truncateIndex)  }...`;
+
+    trimmedValue = `${trimmedValue.substring(0, truncateIndex)}...`;
   }
-  
+
   return trimmedValue;
 }
 
 async function createOrFetchTag(forum, tagName) {
   try {
-    const existingTags = await forum.availableTags;
-    let tag = existingTags.find(t => t.name === tagName);
+    // First check existing tags
+    let existingTags = await forum.availableTags;
+    let tag = existingTags.find((t) => t.name === tagName);
 
+    // If tag doesn't exist, create it
     if (!tag) {
       const newTags = [...existingTags, { name: tagName }];
       await forum.setAvailableTags(newTags);
-      tag = newTags.find(t => t.name === tagName);
-      logger.info(`Created new tag "${tagName}" for forum ${forum.name}`);
+
+      // Fetch fresh tag list to get the new tag with ID
+      existingTags = await forum.availableTags;
+      tag = existingTags.find((t) => t.name === tagName);
+
+      if (tag) {
+        logger.info(`Created new tag "${tagName}" for forum ${forum.name}`);
+      }
     }
 
-    if (!tag || !tag.id) {
-      logger.error(`Failed to create or fetch tag "${tagName}" with a valid ID`);
+    if (!tag?.id) {
+      logger.error(
+        `Failed to create or fetch tag "${tagName}" with a valid ID`
+      );
       return null;
     }
+
     return tag;
   } catch (error) {
     logger.error(`Error creating/fetching tag "${tagName}": ${error.message}`);
@@ -242,28 +292,33 @@ async function createOrFetchTag(forum, tagName) {
   }
 }
 
-
 async function sendToDiscord(formattedResponse, formId, trackedResponses) {
-  let initialMessage = '';
+  let initialMessage = "";
+
+  logger.info(`Starting sendToDiscord for form ${formId}`);
+  logger.debug(`Formatted response: ${JSON.stringify(formattedResponse)}`);
 
   try {
     const forumMapping = FORM_FORUM_MAPPING[formId];
     let forumId, customForumName, tagName, responseUrl;
 
+    logger.debug(`Forum mapping: ${JSON.stringify(forumMapping)}`);
+
     if (Array.isArray(forumMapping)) {
       [forumId, customForumName, responseUrl] = forumMapping;
       tagName = customForumName;
+      logger.debug(
+        `Array mapping - ForumId: ${forumId}, Name: ${customForumName}, URL: ${responseUrl}`
+      );
     } else {
       forumId = forumMapping;
+      logger.debug(`Simple mapping - ForumId: ${forumId}`);
     }
-
-    logger.info(`Processing form ${formId} with mapping: ${JSON.stringify(forumMapping)}`);
 
     if (!forumId) {
       logger.error(`No forum ID mapped for form ID ${formId}`);
       return false;
     }
-  
 
     if (!responseUrl) {
       logger.error(`No response URL provided for form ID ${formId}`);
@@ -271,37 +326,50 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
     }
 
     const forum = await discordClient.channels.fetch(forumId);
+    logger.debug(`Fetched forum: ${forum?.name} (${forum?.id})`);
 
     if (!forum || forum.type !== ChannelType.GuildForum) {
-      logger.error(`Channel with ID ${forumId} is not a forum channel.`);
+      logger.error(`Channel ${forumId} is not a forum: ${forum?.type}`);
       return false;
     }
 
     const forumName = customForumName || forum.name;
-
     const projectName = getProjectName(formattedResponse);
     const totalCost = getTotalCost(formattedResponse);
 
     const threadName = truncate(
-      `${formattedResponse.Submitted} - ${projectName} - ${totalCost}`,
-      100,
+      `${formattedResponse.Submitted} - ${projectName}${
+        totalCost ? ` - ${totalCost}` : ""
+      }`,
+      100
     );
-    const formattedMessage = formatResponseMessage(formattedResponse, responseUrl);
+    logger.debug(`Thread name (${threadName.length} chars): ${threadName}`);
+
+    const formattedMessage = formatResponseMessage(
+      formattedResponse,
+      responseUrl
+    );
     const message = formattedMessage.content;
     const components = formattedMessage.components;
+
+    logger.debug(`Message length: ${message.length} characters`);
+    logger.debug(`Components count: ${components.length}`);
 
     const appliedTags = [];
     if (tagName) {
       const tag = await createOrFetchTag(forum, tagName);
       if (tag && tag.id) {
         appliedTags.push(tag.id);
+        logger.debug(`Applied tag: ${tagName} (${tag.id})`);
       }
     }
 
     const questions = splitIntoQuestions(message);
+    logger.debug(`Split into ${questions.length} questions`);
 
     const remainingQuestions = [];
     const maxLength = 2000 - JSON.stringify(createButton(responseUrl)).length;
+    logger.debug(`Maximum message length: ${maxLength}`);
 
     for (const question of questions) {
       if (initialMessage.length + question.length <= maxLength) {
@@ -311,49 +379,61 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
       }
     }
 
-    // Create thread with as many questions as possible and embed
+    logger.debug(`Initial message length: ${initialMessage.length}`);
+    logger.debug(`Remaining questions: ${remainingQuestions.length}`);
+
+    // Create thread with initial message
+    logger.info(
+      `Creating thread "${threadName}" with ${initialMessage.length} chars`
+    );
     const thread = await forum.threads.create({
       name: threadName,
       message: {
         content: initialMessage.trim(),
-        flags: 1 << 2, // This sets the SUPPRESS_EMBEDS flag
+        flags: 1 << 2,
         components,
       },
       appliedTags,
-      autoArchiveDuration: 10080, // Set to maximum value (7 days)
+      autoArchiveDuration: 10080,
     });
 
-    logger.info(`Successfully created thread ${threadName} in ${forumName} with tags: ${appliedTags.join(', ')}`);
+    logger.info(`Thread created: ${thread.id}`);
 
-    // Send remaining questions as separate messages
-    for (const question of remainingQuestions) {
-      await thread.send({ 
+    // Send remaining questions
+    for (const [index, question] of remainingQuestions.entries()) {
+      logger.debug(
+        `Sending follow-up message ${index + 1}/${remainingQuestions.length} (${
+          question.length
+        } chars)`
+      );
+      await thread.send({
         content: question,
         flags: 1 << 2,
       });
     }
 
-    // Tag admin role in the newly created thread
+    // Tag admin role
     const guild = forum.guild;
     const adminRole = await getAdminRole(guild);
 
     if (adminRole) {
+      logger.debug(`Tagging admin role: ${adminRole.name} (${adminRole.id})`);
       await thread.send({
-        content: `<@&${adminRole.id}> A new funding request has been received.`,
+        content: `<@&${adminRole.id}> A form submission has been received.`,
         allowedMentions: { roles: [adminRole.id] },
       });
-    } else {
-      logger.warn('Admin role not found or not set. Skipping admin role tagging.');
     }
 
-    // Update and save response track
+    // Update response track
     trackedResponses[formId] = trackedResponses[formId] || [];
     trackedResponses[formId].push(formattedResponse);
     await saveResponseTrack(trackedResponses);
 
+    logger.info(`Successfully processed form response in thread ${thread.id}`);
     return true;
   } catch (error) {
     logger.error(`Error sending message to Discord: ${error.message}`);
+    logger.error(`Error stack: ${error.stack}`);
     if (error.code) {
       logger.error(`Discord API Error Code: ${error.code}`);
     }
@@ -361,8 +441,126 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
   }
 }
 
+function formatResponseMessage(response, responseUrl) {
+  logger.debug("Starting formatResponseMessage");
+  logger.debug(`Response keys: ${Object.keys(response)}`);
+
+  let message = "";
+  const navigationButtons = [];
+  const winningOfferButtons = [];
+  const otherOfferButtons = [];
+
+  const entries = Object.entries(response).filter(
+    ([key, value]) => value && key !== "Submitted" && key !== "responseId"
+  );
+  logger.debug(`Processing ${entries.length} entries`);
+
+  const sortedEntries = entries.sort((a, b) => {
+    const aIsName = a[0].toLowerCase().includes("name");
+    const bIsName = b[0].toLowerCase().includes("name");
+    return aIsName && !bIsName ? -1 : !aIsName && bIsName ? 1 : 0;
+  });
+
+  sortedEntries.forEach(([key, value], index) => {
+    logger.debug(
+      `Processing entry ${index + 1}/${sortedEntries.length}: ${key}`
+    );
+    const lowerKey = key.toLowerCase();
+
+    try {
+      if (
+        !PROJECT_NAME_KEYS.some((nameKey) =>
+          lowerKey.includes(nameKey.toLowerCase())
+        )
+      ) {
+        if (lowerKey.includes("website")) {
+          let url = value.trim();
+          if (!url.startsWith("https://")) {
+            url = "https://" + url.replace(/^http:\/\//i, "");
+          }
+          try {
+            new URL(url);
+            navigationButtons.push(
+              new ButtonBuilder()
+                .setStyle(ButtonStyle.Link)
+                .setLabel("🌐 Website")
+                .setURL(url)
+            );
+            logger.debug(`Added website button: ${url}`);
+          } catch (error) {
+            logger.warn(`Invalid website URL: ${url}`);
+          }
+        } else if (typeof value === "object" && !Array.isArray(value)) {
+          Object.entries(value).forEach(([fileName, fileUrl]) => {
+            const isWinningOffer = lowerKey.includes("winning");
+            const button = new ButtonBuilder()
+              .setStyle(ButtonStyle.Link)
+              .setLabel(
+                truncate(
+                  `${isWinningOffer ? "🏆 " : "📄 "}${cleanFileName(fileName)}`,
+                  80
+                )
+              )
+              .setURL(fileUrl);
+
+            if (isWinningOffer) {
+              winningOfferButtons.push(button);
+            } else {
+              otherOfferButtons.push(button);
+            }
+            logger.debug(
+              `Added ${
+                isWinningOffer ? "winning" : "other"
+              } offer button: ${fileName}`
+            );
+          });
+        } else {
+          const newContent = `## ${key}\n${formatStringWithSubstrateAddresses(
+            value.toString()
+          )}\n\n`;
+          message += newContent;
+          logger.debug(
+            `Added content section: ${key} (${newContent.length} chars)`
+          );
+        }
+      }
+    } catch (error) {
+      logger.error(`Error processing entry ${key}: ${error.message}`);
+    }
+  });
+
+  if (responseUrl) {
+    navigationButtons.push(
+      new ButtonBuilder()
+        .setStyle(ButtonStyle.Link)
+        .setLabel("📑 Spreadsheet")
+        .setURL(responseUrl)
+    );
+    logger.debug("Added spreadsheet button");
+  }
+
+  const actionRows = [];
+  if (navigationButtons.length > 0) {
+    actionRows.push(new ActionRowBuilder().addComponents(navigationButtons));
+  }
+
+  const allOfferButtons = [...winningOfferButtons, ...otherOfferButtons];
+  if (allOfferButtons.length > 0) {
+    for (let i = 0; i < allOfferButtons.length; i += 5) {
+      actionRows.push(
+        new ActionRowBuilder().addComponents(allOfferButtons.slice(i, i + 5))
+      );
+    }
+  }
+
+  logger.debug(`Final message length: ${message.length}`);
+  logger.debug(`Action rows: ${actionRows.length}`);
+
+  return { content: message.trim(), components: actionRows };
+}
+
 async function checkNewResponses(auth, formId, responseTrack) {
-  const forms = google.forms({ version: 'v1', auth });
+  const forms = google.forms({ version: "v1", auth });
   let formName = formId;
   let formDetails;
 
@@ -373,7 +571,9 @@ async function checkNewResponses(auth, formId, responseTrack) {
     if (formDetails && formDetails.info) {
       formName = formDetails.info.title;
     } else {
-      logger.warn(`Unable to fetch form details for ${formId}. Using form ID as name.`);
+      logger.warn(
+        `Unable to fetch form details for ${formId}. Using form ID as name.`
+      );
     }
 
     const response = await forms.forms.responses.list({ formId });
@@ -391,17 +591,31 @@ async function checkNewResponses(auth, formId, responseTrack) {
     );
 
     if (newResponses.length > 0) {
-      logger.info(`Found ${newResponses.length} new responses for form "${formName}"`);
+      logger.info(
+        `Found ${newResponses.length} new responses for form "${formName}"`
+      );
 
       // Sort new responses by submission time (oldest first)
-      newResponses.sort((a, b) => new Date(a.lastSubmittedTime) - new Date(b.lastSubmittedTime));
+      newResponses.sort(
+        (a, b) => new Date(a.lastSubmittedTime) - new Date(b.lastSubmittedTime)
+      );
 
       for (const response of newResponses) {
-        const formattedResponse = await formatResponse(response, formDetails, auth);
-        const threadCreated = await sendToDiscord(formattedResponse, formId, responseTrack);
+        const formattedResponse = await formatResponse(
+          response,
+          formDetails,
+          auth
+        );
+        const threadCreated = await sendToDiscord(
+          formattedResponse,
+          formId,
+          responseTrack
+        );
 
         if (!threadCreated) {
-          logger.warn(`Failed to create thread for response ${formattedResponse.responseId} submitted on ${formattedResponse.Submitted}`);
+          logger.warn(
+            `Failed to create thread for response ${formattedResponse.responseId} submitted on ${formattedResponse.Submitted}`
+          );
         }
       }
 
@@ -416,21 +630,19 @@ async function checkNewResponses(auth, formId, responseTrack) {
   }
 }
 
-
 function sanitizeFileName(name) {
-  return name.replace(/[^a-zA-Z0-9-_.]/g, '_');
+  return name.replace(/[^a-zA-Z0-9-_.]/g, "_");
 }
-
 
 async function formatResponse(response, formDetails, auth) {
   if (!formDetails || !Array.isArray(formDetails.items)) {
-    throw new Error('Form details are required but missing or invalid');
+    throw new Error("Form details are required but missing or invalid");
   }
 
   // Create formatted response starting with metadata
   const formattedResponse = {
     responseId: response.responseId,
-    Submitted: response.lastSubmittedTime.split('T')[0]
+    Submitted: response.lastSubmittedTime.split("T")[0],
   };
 
   // Create answers map for quick lookup
@@ -446,41 +658,50 @@ async function formatResponse(response, formDetails, auth) {
       const answer = answersMap[questionId];
       const questionText = item.title;
 
-      if (!answer) continue;  // Skip if no answer for this question
+      if (!answer) continue; // Skip if no answer for this question
 
       try {
         if (answer.fileUploadAnswers) {
           const fileAnswers = {};
           for (const fileAnswer of answer.fileUploadAnswers.answers) {
             const originalFileName = sanitizeFileName(fileAnswer.fileName);
-            fileAnswers[originalFileName] = `https://drive.google.com/open?id=${fileAnswer.fileId}`;
+            fileAnswers[
+              originalFileName
+            ] = `https://drive.google.com/open?id=${fileAnswer.fileId}`;
           }
           formattedResponse[questionText] = fileAnswers;
         } else if (answer.textAnswers) {
-          formattedResponse[questionText] = answer.textAnswers.answers.map(a => a.value).join(', ');
+          formattedResponse[questionText] = answer.textAnswers.answers
+            .map((a) => a.value)
+            .join(", ");
         } else if (answer.scaleAnswers) {
-          formattedResponse[questionText] = answer.scaleAnswers.answers.map(a => a.value).join(', ');
+          formattedResponse[questionText] = answer.scaleAnswers.answers
+            .map((a) => a.value)
+            .join(", ");
         } else if (answer.dateAnswers) {
           formattedResponse[questionText] = answer.dateAnswers.answers
-            .map(a => `${a.year}-${a.month}-${a.day}`)
-            .join(', ');
+            .map((a) => `${a.year}-${a.month}-${a.day}`)
+            .join(", ");
         } else if (answer.timeAnswers) {
           formattedResponse[questionText] = answer.timeAnswers.answers
-            .map(a => `${a.hours}:${a.minutes}:${a.seconds}`)
-            .join(', ');
+            .map((a) => `${a.hours}:${a.minutes}:${a.seconds}`)
+            .join(", ");
         } else if (answer.choiceAnswers) {
-          formattedResponse[questionText] = answer.choiceAnswers.answers.map(a => a.value).join(', ');
+          formattedResponse[questionText] = answer.choiceAnswers.answers
+            .map((a) => a.value)
+            .join(", ");
         }
       } catch (error) {
-        logger.error(`Error processing answer for question "${questionText}": ${error.message}`);
-        formattedResponse[questionText] = 'Error processing answer';
+        logger.error(
+          `Error processing answer for question "${questionText}": ${error.message}`
+        );
+        formattedResponse[questionText] = "Error processing answer";
       }
     }
   }
 
   return formattedResponse;
 }
-
 
 function isValidSubstrateAddress(address) {
   try {
@@ -503,31 +724,38 @@ function formatStringWithSubstrateAddresses(str) {
   });
 }
 
-function isValidUrl(urlString) {
-  try {
-    const url = new URL(urlString);
-    return url.protocol === 'https:' || url.protocol === 'http:';
-  } catch {
-    return false;
-  }
+function cleanFileName(fileName) {
+  return (
+    fileName
+      // Replace multiple underscores with single space
+      .replace(/_+/g, " ")
+      // Replace remaining single underscores with spaces
+      .replace(/_/g, " ")
+      // Fix cases where we have ' - ' with extra spaces
+      .replace(/\s+-\s+/g, " - ")
+      // Clean up any double spaces that might have been created
+      .replace(/\s+/g, " ")
+      // Trim any leading/trailing spaces
+      .trim()
+  );
 }
 
-
 function formatResponseMessage(response, responseUrl) {
-  let message = '';
+  let message = "";
   const navigationButtons = []; // For website and spreadsheet
   const winningOfferButtons = []; // For winning offers
   const otherOfferButtons = []; // For other offers
 
   // Separate entries into name-related and other
-  const entries = Object.entries(response)
-    .filter(([key, value]) => value && key !== 'Submitted' && key !== 'responseId');
-  
+  const entries = Object.entries(response).filter(
+    ([key, value]) => value && key !== "Submitted" && key !== "responseId"
+  );
+
   // Sort entries to put "name" fields first
   const sortedEntries = entries.sort((a, b) => {
-    const aIsName = a[0].toLowerCase().includes('name');
-    const bIsName = b[0].toLowerCase().includes('name');
-    
+    const aIsName = a[0].toLowerCase().includes("name");
+    const bIsName = b[0].toLowerCase().includes("name");
+
     if (aIsName && !bIsName) return -1;
     if (!aIsName && bIsName) return 1;
     return 0;
@@ -535,50 +763,51 @@ function formatResponseMessage(response, responseUrl) {
 
   sortedEntries.forEach(([key, value]) => {
     const lowerKey = key.toLowerCase();
-    
-    if (!PROJECT_NAME_KEYS.some(nameKey => lowerKey.includes(nameKey.toLowerCase()))) {
-      if (lowerKey.includes('website')) {
+
+    if (
+      !PROJECT_NAME_KEYS.some((nameKey) =>
+        lowerKey.includes(nameKey.toLowerCase())
+      )
+    ) {
+      if (lowerKey.includes("website")) {
         let url = value.trim();
-        if (!url.startsWith('https://')) {
-          url = 'https://' + url.replace(/^http:\/\//i, '');
+        if (!url.startsWith("https://")) {
+          url = "https://" + url.replace(/^http:\/\//i, "");
         }
         try {
           new URL(url); // Will throw if invalid
           navigationButtons.push(
             new ButtonBuilder()
               .setStyle(ButtonStyle.Link)
-              .setLabel('🌐 Website')
+              .setLabel("🌐 Website")
               .setURL(url)
           );
         } catch (error) {
           logger.warn(`Skipping invalid website URL: ${url}`);
         }
-      } else if (typeof value === 'object' && !Array.isArray(value)) {
-        // Handle file attachments
+      } else if (typeof value === "object" && !Array.isArray(value)) {
         Object.entries(value).forEach(([fileName, fileUrl]) => {
-          try {
-            new URL(fileUrl); // Validate URL
-            const isWinningOffer = lowerKey.includes('winning');
-            const prefix = isWinningOffer ? '🏆 ' : '📄 ';
-            const label = `${prefix}${fileName}`;
-            
-            const button = new ButtonBuilder()
-              .setStyle(ButtonStyle.Link)
-              .setLabel(label)
-              .setURL(fileUrl);
+          const isWinningOffer = lowerKey.includes("winning");
+          const prefix = isWinningOffer ? "🏆 " : "📄 ";
+          const cleanedFileName = cleanFileName(fileName);
+          const label = `${prefix}${cleanedFileName}`;
 
-            if (isWinningOffer) {
-              winningOfferButtons.push(button);
-            } else {
-              otherOfferButtons.push(button);
-            }
-          } catch (error) {
-            logger.warn(`Skipping invalid file URL for ${fileName}: ${fileUrl}`);
+          const button = new ButtonBuilder()
+            .setStyle(ButtonStyle.Link)
+            .setLabel(truncate(label, 80))
+            .setURL(fileUrl);
+
+          if (isWinningOffer) {
+            winningOfferButtons.push(button);
+          } else {
+            otherOfferButtons.push(button);
           }
         });
       } else {
         message += `## ${key}\n`;
-        message += `${formatStringWithSubstrateAddresses(value.toString())}\n\n`;
+        message += `${formatStringWithSubstrateAddresses(
+          value.toString()
+        )}\n\n`;
       }
     }
   });
@@ -588,18 +817,16 @@ function formatResponseMessage(response, responseUrl) {
     navigationButtons.push(
       new ButtonBuilder()
         .setStyle(ButtonStyle.Link)
-        .setLabel('📑 Spreadsheet')
+        .setLabel("📑 Spreadsheet")
         .setURL(responseUrl)
     );
   }
 
   const actionRows = [];
-  
+
   // First row: Navigation buttons (Website and Spreadsheet)
   if (navigationButtons.length > 0) {
-    actionRows.push(
-      new ActionRowBuilder().addComponents(navigationButtons)
-    );
+    actionRows.push(new ActionRowBuilder().addComponents(navigationButtons));
   }
 
   // Second row: Offers (Winning offers first, then other offers)
@@ -622,22 +849,22 @@ function handleApiError(error, context) {
     logger.error(`Status: ${status}, Data: ${JSON.stringify(data)}`);
 
     switch (status) {
-    case 429:
-      logger.warn('Rate limit exceeded. Implementing exponential backoff...');
-      // Implement exponential backoff logic here
-      break;
-    case 403:
-      logger.error(
-        'Access forbidden. Check API credentials and permissions.',
-      );
-      break;
-    case 500:
-      logger.error(
-        'Internal server error from Google API. Retrying later...',
-      );
-      break;
-    default:
-      logger.error(`Unexpected error status: ${status}`);
+      case 429:
+        logger.warn("Rate limit exceeded. Implementing exponential backoff...");
+        // Implement exponential backoff logic here
+        break;
+      case 403:
+        logger.error(
+          "Access forbidden. Check API credentials and permissions."
+        );
+        break;
+      case 500:
+        logger.error(
+          "Internal server error from Google API. Retrying later..."
+        );
+        break;
+      default:
+        logger.error(`Unexpected error status: ${status}`);
     }
   }
 }
@@ -646,10 +873,10 @@ async function main() {
   try {
     const auth = await authorize();
     const responseTrack = await loadResponseTrack();
-    logger.info('Initial responseTrack:', responseTrack);
+    logger.info("Initial responseTrack:", responseTrack);
 
-    discordClient.once('ready', async () => {
-      logger.info('Discord bot is ready!');
+    discordClient.once("ready", async () => {
+      logger.info("Discord bot is ready!");
       logger.info(`Logged in as ${discordClient.user.tag}`);
       logger.info(`Serving in guild: ${process.env.DISCORD_GUILD_ID}`);
 
@@ -666,27 +893,37 @@ async function main() {
 
           const forum = await discordClient.channels.fetch(forumId);
           forumMappingsWithNames[formId] = {
-            name: customName || (forum ? forum.name : 'Unknown Forum'),
-            tagName: tagName || 'No Tag',
+            name: customName || (forum ? forum.name : "Unknown Forum"),
+            tagName: tagName || "No Tag",
           };
         } catch (error) {
-          forumMappingsWithNames[formId] = { name: 'Error fetching forum', tagName: 'Error' };
+          forumMappingsWithNames[formId] = {
+            name: "Error fetching forum",
+            tagName: "Error",
+          };
           logger.error(
-            `Error fetching forum for formId ${formId}: ${error.message}`,
+            `Error fetching forum for formId ${formId}: ${error.message}`
           );
         }
       }
-      logger.info('Forum mappings:', JSON.stringify(forumMappingsWithNames, null, 2));
+      logger.info(
+        "Forum mappings:",
+        JSON.stringify(forumMappingsWithNames, null, 2)
+      );
 
-      const guild = await discordClient.guilds.fetch(process.env.DISCORD_GUILD_ID);
+      const guild = await discordClient.guilds.fetch(
+        process.env.DISCORD_GUILD_ID
+      );
       const adminRole = await getAdminRole(guild);
       if (!adminRole) {
-        logger.warn('Admin role not found or not set. Admin role tagging will be skipped.');
+        logger.warn(
+          "Admin role not found or not set. Admin role tagging will be skipped."
+        );
       }
     });
 
-    discordClient.on('error', (error) => {
-      logger.error('Discord client error:', error);
+    discordClient.on("error", (error) => {
+      logger.error("Discord client error:", error);
     });
 
     await discordClient.login(process.env.DISCORD_BOT_TOKEN);
