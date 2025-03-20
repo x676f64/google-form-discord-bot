@@ -9,6 +9,10 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  SlashCommandBuilder,
+  REST,
+  Routes,
+  PermissionFlagsBits,
 } = require("discord.js");
 const winston = require("winston");
 const { decodeAddress, encodeAddress } = require("@polkadot/util-crypto");
@@ -37,14 +41,94 @@ const PROJECT_NAME_KEYS = JSON.parse(
 // Parse the FORM_FORUM_MAPPING environment variable
 const FORM_FORUM_MAPPING = JSON.parse(process.env.FORM_FORUM_MAPPING || "{}");
 
-// Get admin role ID from environment variable
-const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID;
+// Get admin role from environment variable
+const ADMIN_ROLE = process.env.ADMIN_ROLE;
+
+// Get log channel from environment variable
+const LOG_CHANNEL = process.env.LOG_CHANNEL;
 
 const discordClient = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
 });
 
-// Configure logger
+// Discord log transport class
+class DiscordTransport extends winston.Transport {
+  constructor(opts) {
+    super(opts);
+    this.name = "discord";
+    this.level = opts.level || "info";
+    this.queue = [];
+    this.isProcessing = false;
+    this.channelId = LOG_CHANNEL;
+    this.client = opts.client;
+  }
+
+  async log(info, callback) {
+    try {
+      if (!this.channelId || !this.client) {
+        return callback();
+      }
+
+      const logMessage = `${info.timestamp} ${info.level}: ${info.message}`;
+      this.queue.push(logMessage);
+      this.processQueue();
+
+      callback();
+    } catch (error) {
+      console.error(`Error in Discord logging: ${error.message}`);
+      callback();
+    }
+  }
+
+  async processQueue() {
+    if (this.isProcessing || this.queue.length === 0) return;
+
+    this.isProcessing = true;
+
+    try {
+      const channel = await findChannel(this.client, this.channelId);
+      if (!channel) {
+        console.error(`Discord log channel ${this.channelId} not found`);
+        this.isProcessing = false;
+        return;
+      }
+
+      // Process messages from the queue
+      while (this.queue.length > 0) {
+        let combinedMessage = "";
+
+        // Combine messages up to Discord's character limit
+        while (
+          this.queue.length > 0 &&
+          combinedMessage.length + this.queue[0].length + 1 < 2000
+        ) {
+          combinedMessage += this.queue.shift() + "\n";
+        }
+
+        if (combinedMessage) {
+          await channel.send({
+            content: "```\n" + combinedMessage + "\n```",
+            flags: 1 << 2, // Suppress embeds
+          });
+        }
+
+        // Small delay to prevent rate limiting
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    } catch (error) {
+      console.error(`Error sending logs to Discord: ${error.message}`);
+    } finally {
+      this.isProcessing = false;
+
+      // If there are still messages in the queue, process them
+      if (this.queue.length > 0) {
+        setTimeout(() => this.processQueue(), 100);
+      }
+    }
+  }
+}
+
+// Initialize logger without Discord transport (added after client is ready)
 const logger = winston.createLogger({
   level: "info",
   format: winston.format.combine(
@@ -55,10 +139,38 @@ const logger = winston.createLogger({
   ),
   transports: [
     new winston.transports.Console(),
-    new winston.transports.File({ filename: ERROR_LOG_FILE, level: "error" }),
     new winston.transports.File({ filename: COMBINED_LOG_FILE }),
   ],
 });
+
+async function registerCommands() {
+  try {
+    const commands = [
+      new SlashCommandBuilder()
+        .setName("check")
+        .setDescription("Force check of all Google Forms for new responses"),
+      // Remove default permission - we'll check for admin role manually
+    ];
+
+    const rest = new REST({ version: "10" }).setToken(
+      process.env.DISCORD_BOT_TOKEN
+    );
+
+    logger.info("Started refreshing application (/) commands.");
+
+    await rest.put(
+      Routes.applicationGuildCommands(
+        discordClient.user.id,
+        process.env.DISCORD_GUILD_ID
+      ),
+      { body: commands.map((command) => command.toJSON()) }
+    );
+
+    logger.info("Successfully registered application commands.");
+  } catch (error) {
+    logger.error(`Error registering slash commands: ${error.message}`);
+  }
+}
 
 async function authorize() {
   try {
@@ -85,36 +197,85 @@ async function getFormDetails(auth, formId) {
   }
 }
 
+/**
+ * Helper function to find a role by ID or name
+ * @param {Guild} guild - Discord guild object
+ * @param {string} roleIdentifier - Role ID or name to find
+ * @returns {Role|null} - The role object or null if not found
+ */
+async function findRole(guild, roleIdentifier) {
+  if (!roleIdentifier) {
+    return null;
+  }
+
+  try {
+    let role;
+    if (/^\d+$/.test(roleIdentifier)) {
+      // If it's a numeric string, treat it as an ID
+      role = await guild.roles.fetch(roleIdentifier);
+    } else {
+      // If it's not numeric, treat it as a name (case-insensitive)
+      const lowerCaseName = roleIdentifier.toLowerCase();
+      role = guild.roles.cache.find(
+        (r) => r.name.toLowerCase() === lowerCaseName
+      );
+    }
+
+    return role || null;
+  } catch (error) {
+    logger.error(`Error finding role "${roleIdentifier}": ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Helper function to find a channel by ID or name
+ * @param {Client} client - Discord client
+ * @param {string} channelIdentifier - Channel ID or name to find
+ * @returns {Channel|null} - The channel object or null if not found
+ */
+async function findChannel(client, channelIdentifier) {
+  if (!channelIdentifier) {
+    return null;
+  }
+
+  try {
+    let channel;
+    if (/^\d+$/.test(channelIdentifier)) {
+      // If it's a numeric string, treat it as an ID
+      channel = await client.channels.fetch(channelIdentifier);
+    } else {
+      // If it's not numeric, treat it as a name (case-insensitive)
+      const lowerCaseName = channelIdentifier.toLowerCase();
+      channel = client.channels.cache.find(
+        (c) => c.name && c.name.toLowerCase() === lowerCaseName
+      );
+    }
+
+    return channel || null;
+  } catch (error) {
+    logger.error(
+      `Error finding channel "${channelIdentifier}": ${error.message}`
+    );
+    return null;
+  }
+}
+
 async function getAdminRole(guild) {
-  if (!ADMIN_ROLE_ID) {
+  if (!ADMIN_ROLE) {
     logger.warn(
       "No admin role ID or name provided. Admin role tagging will be skipped."
     );
     return null;
   }
 
-  try {
-    let adminRole;
-    if (/^\d+$/.test(ADMIN_ROLE_ID)) {
-      // If it's a numeric string, treat it as an ID
-      adminRole = await guild.roles.fetch(ADMIN_ROLE_ID);
-    } else {
-      // If it's not numeric, treat it as a name (case-insensitive)
-      const lowerCaseRoleName = ADMIN_ROLE_ID.toLowerCase();
-      adminRole = guild.roles.cache.find(
-        (role) => role.name.toLowerCase() === lowerCaseRoleName
-      );
-    }
+  const adminRole = await findRole(guild, ADMIN_ROLE);
 
-    if (adminRole) {
-      logger.debug(`Admin role set: "${adminRole.name}" (${adminRole.id})`);
-      return adminRole;
-    } else {
-      logger.warn(`Admin role "${ADMIN_ROLE_ID}" not found in the guild.`);
-      return null;
-    }
-  } catch (error) {
-    logger.error(`Error fetching admin role: ${error.message}`);
+  if (adminRole) {
+    logger.debug(`Admin role set: "${adminRole.name}" (${adminRole.id})`);
+    return adminRole;
+  } else {
+    logger.warn(`Admin role "${ADMIN_ROLE}" not found in the guild.`);
     return null;
   }
 }
@@ -162,9 +323,11 @@ async function saveResponseTrack(track) {
       JSON.stringify(track, null, 2),
       "utf8"
     );
-    logger.info(`Successfully wrote to ${RESPONSE_TRACK_FILE}`);
+    const filename = path.basename(RESPONSE_TRACK_FILE);
+    logger.info(`Successfully wrote to ${filename}`);
   } catch (error) {
-    logger.error(`Error writing to ${RESPONSE_TRACK_FILE}: ${error.message}`);
+    const filename = path.basename(RESPONSE_TRACK_FILE);
+    logger.error(`Error writing to ${filename}: ${error.message}`);
   }
 }
 
@@ -587,6 +750,25 @@ async function checkNewResponses(auth, formId, responseTrack) {
   }
 }
 
+async function checkAllForms(auth, responseTrack) {
+  //logger.info("Manually checking all forms for new responses");
+
+  let foundNew = false;
+
+  for (const formId of Object.keys(FORM_FORUM_MAPPING)) {
+    try {
+      const result = await checkNewResponses(auth, formId, responseTrack);
+      if (result) {
+        foundNew = true;
+      }
+    } catch (error) {
+      logger.error(`Error processing form ${formId}: ${error.message}`);
+    }
+  }
+
+  return foundNew;
+}
+
 function sanitizeFileName(name) {
   return name.replace(/[^a-zA-Z0-9-_.]/g, "_");
 }
@@ -728,12 +910,37 @@ async function main() {
   try {
     const auth = await authorize();
     const responseTrack = await loadResponseTrack();
-    logger.info("Initial responseTrack:", responseTrack);
+    logger.info("Initial responseTrack loaded");
 
     discordClient.once("ready", async () => {
       logger.info("Discord bot is ready!");
       logger.info(`Logged in as ${discordClient.user.tag}`);
       logger.info(`Serving in guild: ${process.env.DISCORD_GUILD_ID}`);
+
+      // Add Discord logging transport once client is ready
+      if (LOG_CHANNEL) {
+        const logChannel = await findChannel(discordClient, LOG_CHANNEL);
+        if (logChannel) {
+          logger.add(
+            new DiscordTransport({
+              client: discordClient,
+              level: "info",
+            })
+          );
+          logger.info(
+            `Discord logging to channel ${logChannel.name} (${logChannel.id}) enabled`
+          );
+        } else {
+          logger.warn(
+            `Log channel "${LOG_CHANNEL}" not found, Discord logging disabled`
+          );
+        }
+      } else {
+        logger.warn("LOG_CHANNEL not set in .env, Discord logging disabled");
+      }
+
+      // Register slash commands
+      await registerCommands();
 
       // Log forum mappings with forum names and tags
       const forumMappingsWithNames = {};
@@ -779,6 +986,50 @@ async function main() {
 
     discordClient.on("error", (error) => {
       logger.error("Discord client error:", error);
+    });
+
+    // Handle slash commands
+    discordClient.on("interactionCreate", async (interaction) => {
+      if (!interaction.isCommand()) return;
+
+      const { commandName } = interaction;
+
+      if (commandName === "check") {
+        // Check if the user has the admin role
+        const adminRole = await getAdminRole(interaction.guild);
+        const hasAdminRole =
+          adminRole && interaction.member.roles.cache.has(adminRole.id);
+
+        if (!hasAdminRole) {
+          return interaction.reply({
+            content: `You need the ${
+              adminRole ? adminRole.name : "admin"
+            } role to use this command.`,
+            ephemeral: true,
+          });
+        }
+
+        await interaction.deferReply();
+        logger.info(`Manual form check triggered by ${interaction.user.tag}`);
+
+        try {
+          const foundNew = await checkAllForms(auth, responseTrack);
+          if (foundNew) {
+            await interaction.editReply(
+              "Check complete! New form responses were found and processed."
+            );
+          } else {
+            await interaction.editReply(
+              "Check complete! No new form responses were found."
+            );
+          }
+        } catch (error) {
+          logger.error(`Error during manual check: ${error.message}`);
+          await interaction.editReply(
+            "An error occurred while checking forms. See logs for details."
+          );
+        }
+      }
     });
 
     await discordClient.login(process.env.DISCORD_BOT_TOKEN);
