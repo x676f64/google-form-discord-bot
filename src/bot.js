@@ -434,14 +434,12 @@ async function createOrFetchTag(forum, tagName) {
 async function sendToDiscord(formattedResponse, formId, trackedResponses) {
   let initialMessage = "";
 
-  logger.debug(`Starting sendToDiscord for form ${formId}`);
+  logger.info(`Starting sendToDiscord for form ${formId}`);
   logger.debug(`Formatted response: ${JSON.stringify(formattedResponse)}`);
 
   try {
     const forumMapping = FORM_FORUM_MAPPING[formId];
     let forumId, customForumName, tagName, responseUrl;
-
-    logger.debug(`Forum mapping: ${JSON.stringify(forumMapping)}`);
 
     if (Array.isArray(forumMapping)) {
       [forumId, customForumName, responseUrl] = forumMapping;
