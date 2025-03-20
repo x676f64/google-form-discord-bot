@@ -442,29 +442,24 @@ async function sendToDiscord(formattedResponse, formId, trackedResponses) {
 }
 
 function formatResponseMessage(response, responseUrl) {
-  logger.debug("Starting formatResponseMessage");
-  logger.debug(`Response keys: ${Object.keys(response)}`);
-
   let message = "";
   const navigationButtons = [];
   const winningOfferButtons = [];
   const otherOfferButtons = [];
 
+  // Filter entries
   const entries = Object.entries(response).filter(
     ([key, value]) => value && key !== "Submitted" && key !== "responseId"
   );
-  logger.debug(`Processing ${entries.length} entries`);
 
+  // Sort entries to put "name" fields first
   const sortedEntries = entries.sort((a, b) => {
     const aIsName = a[0].toLowerCase().includes("name");
     const bIsName = b[0].toLowerCase().includes("name");
     return aIsName && !bIsName ? -1 : !aIsName && bIsName ? 1 : 0;
   });
 
-  sortedEntries.forEach(([key, value], index) => {
-    logger.debug(
-      `Processing entry ${index + 1}/${sortedEntries.length}: ${key}`
-    );
+  sortedEntries.forEach(([key, value]) => {
     const lowerKey = key.toLowerCase();
 
     try {
@@ -486,7 +481,6 @@ function formatResponseMessage(response, responseUrl) {
                 .setLabel("🌐 Website")
                 .setURL(url)
             );
-            logger.debug(`Added website button: ${url}`);
           } catch (error) {
             logger.warn(`Invalid website URL: ${url}`);
           }
@@ -508,20 +502,11 @@ function formatResponseMessage(response, responseUrl) {
             } else {
               otherOfferButtons.push(button);
             }
-            logger.debug(
-              `Added ${
-                isWinningOffer ? "winning" : "other"
-              } offer button: ${fileName}`
-            );
           });
         } else {
-          const newContent = `## ${key}\n${formatStringWithSubstrateAddresses(
+          message += `## ${key}\n${formatStringWithSubstrateAddresses(
             value.toString()
           )}\n\n`;
-          message += newContent;
-          logger.debug(
-            `Added content section: ${key} (${newContent.length} chars)`
-          );
         }
       }
     } catch (error) {
@@ -536,7 +521,6 @@ function formatResponseMessage(response, responseUrl) {
         .setLabel("📑 Spreadsheet")
         .setURL(responseUrl)
     );
-    logger.debug("Added spreadsheet button");
   }
 
   const actionRows = [];
@@ -552,9 +536,6 @@ function formatResponseMessage(response, responseUrl) {
       );
     }
   }
-
-  logger.debug(`Final message length: ${message.length}`);
-  logger.debug(`Action rows: ${actionRows.length}`);
 
   return { content: message.trim(), components: actionRows };
 }
@@ -738,108 +719,6 @@ function cleanFileName(fileName) {
       // Trim any leading/trailing spaces
       .trim()
   );
-}
-
-function formatResponseMessage(response, responseUrl) {
-  let message = "";
-  const navigationButtons = []; // For website and spreadsheet
-  const winningOfferButtons = []; // For winning offers
-  const otherOfferButtons = []; // For other offers
-
-  // Separate entries into name-related and other
-  const entries = Object.entries(response).filter(
-    ([key, value]) => value && key !== "Submitted" && key !== "responseId"
-  );
-
-  // Sort entries to put "name" fields first
-  const sortedEntries = entries.sort((a, b) => {
-    const aIsName = a[0].toLowerCase().includes("name");
-    const bIsName = b[0].toLowerCase().includes("name");
-
-    if (aIsName && !bIsName) return -1;
-    if (!aIsName && bIsName) return 1;
-    return 0;
-  });
-
-  sortedEntries.forEach(([key, value]) => {
-    const lowerKey = key.toLowerCase();
-
-    if (
-      !PROJECT_NAME_KEYS.some((nameKey) =>
-        lowerKey.includes(nameKey.toLowerCase())
-      )
-    ) {
-      if (lowerKey.includes("website")) {
-        let url = value.trim();
-        if (!url.startsWith("https://")) {
-          url = "https://" + url.replace(/^http:\/\//i, "");
-        }
-        try {
-          new URL(url); // Will throw if invalid
-          navigationButtons.push(
-            new ButtonBuilder()
-              .setStyle(ButtonStyle.Link)
-              .setLabel("🌐 Website")
-              .setURL(url)
-          );
-        } catch (error) {
-          logger.warn(`Skipping invalid website URL: ${url}`);
-        }
-      } else if (typeof value === "object" && !Array.isArray(value)) {
-        Object.entries(value).forEach(([fileName, fileUrl]) => {
-          const isWinningOffer = lowerKey.includes("winning");
-          const prefix = isWinningOffer ? "🏆 " : "📄 ";
-          const cleanedFileName = cleanFileName(fileName);
-          const label = `${prefix}${cleanedFileName}`;
-
-          const button = new ButtonBuilder()
-            .setStyle(ButtonStyle.Link)
-            .setLabel(truncate(label, 80))
-            .setURL(fileUrl);
-
-          if (isWinningOffer) {
-            winningOfferButtons.push(button);
-          } else {
-            otherOfferButtons.push(button);
-          }
-        });
-      } else {
-        message += `## ${key}\n`;
-        message += `${formatStringWithSubstrateAddresses(
-          value.toString()
-        )}\n\n`;
-      }
-    }
-  });
-
-  // Add spreadsheet button to navigation buttons
-  if (responseUrl) {
-    navigationButtons.push(
-      new ButtonBuilder()
-        .setStyle(ButtonStyle.Link)
-        .setLabel("📑 Spreadsheet")
-        .setURL(responseUrl)
-    );
-  }
-
-  const actionRows = [];
-
-  // First row: Navigation buttons (Website and Spreadsheet)
-  if (navigationButtons.length > 0) {
-    actionRows.push(new ActionRowBuilder().addComponents(navigationButtons));
-  }
-
-  // Second row: Offers (Winning offers first, then other offers)
-  const allOfferButtons = [...winningOfferButtons, ...otherOfferButtons];
-  if (allOfferButtons.length > 0) {
-    for (let i = 0; i < allOfferButtons.length; i += 5) {
-      actionRows.push(
-        new ActionRowBuilder().addComponents(allOfferButtons.slice(i, i + 5))
-      );
-    }
-  }
-
-  return { content: message.trim(), components: actionRows };
 }
 
 function handleApiError(error, context) {
