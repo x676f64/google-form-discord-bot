@@ -434,7 +434,7 @@ async function createOrFetchTag(forum, tagName) {
 async function sendToDiscord(formattedResponse, formId, trackedResponses) {
   let initialMessage = "";
 
-  logger.info(`Starting sendToDiscord for form ${formId}`);
+  logger.debug(`Starting sendToDiscord for form ${formId}`);
   logger.debug(`Formatted response: ${JSON.stringify(formattedResponse)}`);
 
   try {
@@ -685,9 +685,8 @@ async function checkNewResponses(auth, formId, responseTrack) {
   let formDetails;
 
   try {
-    logger.info(`Checking Google Form API for new responses on form ${formId}`);
+    // Get form details first to get the form name
     formDetails = await getFormDetails(auth, formId);
-
     if (formDetails && formDetails.info) {
       formName = formDetails.info.title;
     } else {
@@ -695,6 +694,10 @@ async function checkNewResponses(auth, formId, responseTrack) {
         `Unable to fetch form details for ${formId}. Using form ID as name.`
       );
     }
+
+    logger.info(
+      `Checking Google Form API for new responses on form "${formName}"`
+    );
 
     const response = await forms.forms.responses.list({ formId });
     const responses = response.data.responses || [];
@@ -751,7 +754,7 @@ async function checkNewResponses(auth, formId, responseTrack) {
 }
 
 async function checkAllForms(auth, responseTrack) {
-  //logger.info("Manually checking all forms for new responses");
+  logger.info("Manually checking all forms for new responses");
 
   let foundNew = false;
 
@@ -1009,25 +1012,30 @@ async function main() {
           });
         }
 
-        await interaction.deferReply();
+        await interaction.deferReply({ ephemeral: true });
         logger.info(`Manual form check triggered by ${interaction.user.tag}`);
 
         try {
           const foundNew = await checkAllForms(auth, responseTrack);
           if (foundNew) {
-            await interaction.editReply(
-              "Check complete! New form responses were found and processed."
-            );
+            await interaction.editReply({
+              content:
+                "Check complete! New form responses were found and processed.",
+              ephemeral: true,
+            });
           } else {
-            await interaction.editReply(
-              "Check complete! No new form responses were found."
-            );
+            await interaction.editReply({
+              content: "Check complete! No new form responses were found.",
+              ephemeral: true,
+            });
           }
         } catch (error) {
           logger.error(`Error during manual check: ${error.message}`);
-          await interaction.editReply(
-            "An error occurred while checking forms. See logs for details."
-          );
+          await interaction.editReply({
+            content:
+              "An error occurred while checking forms. See logs for details.",
+            ephemeral: true,
+          });
         }
       }
     });
