@@ -969,10 +969,6 @@ async function main() {
           );
         }
       }
-      logger.info(
-        "Forum mappings:",
-        JSON.stringify(forumMappingsWithNames, null, 2)
-      );
 
       const guild = await discordClient.guilds.fetch(
         process.env.DISCORD_GUILD_ID
