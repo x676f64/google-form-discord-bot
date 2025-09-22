@@ -357,44 +357,88 @@ function getTotalCost(response) {
   }
 
   const costKeys = [
+    "What is the total cost of the audit? (in US Dollars)",
+    "What is the total cost of the payout? (Bounty reporter + Platform fee, in US Dollars)",
+    "Total requested amount in USD",
     "total cost",
     "budget",
     "funding amount",
     "requested amount",
+    "payout"
   ];
+
   for (const [key, value] of Object.entries(response)) {
-    if (costKeys.some((costKey) => key.toLowerCase().includes(costKey))) {
-      // Truncate the value to a reasonable length
-      const truncatedValue = truncateCost(value);
-      return truncatedValue;
+    const keyLower = key.toLowerCase();
+    if (costKeys.some((costKey) => keyLower.includes(costKey.toLowerCase()))) {
+      if (value && typeof value === 'string') {
+        const normalizedValue = normalizeCost(value);
+        return normalizedValue;
+      }
     }
   }
-  return "Cost not found";
+  return "";
 }
 
-function truncateCost(value) {
-  // Remove leading/trailing whitespace
-  let trimmedValue = value.trim();
-
-  // If the value is longer than 20 characters, truncate it
-  if (trimmedValue.length > 20) {
-    // Try to find a sensible place to truncate
-    let truncateIndex = 20;
-    while (
-      truncateIndex > 0 &&
-      !/[\s,.]/.test(trimmedValue[truncateIndex - 1])
-    ) {
-      truncateIndex--;
-    }
-    // If we couldn't find a good break point, just use 20
-    if (truncateIndex === 0) {
-      truncateIndex = 20;
-    }
-
-    trimmedValue = `${trimmedValue.substring(0, truncateIndex)}...`;
+function normalizeCost(value) {
+  if (!value || typeof value !== 'string') {
+    return '';
   }
 
-  return trimmedValue;
+  // Clean the input and remove extra whitespace
+  const cleanValue = value.trim();
+
+  // Handle different input formats with comprehensive regex
+  // This will match numbers in various currency formats:
+  // - Plain numbers: 100000
+  // - With symbols: $100000, USD100000
+  // - With suffix: 100000USD, 100000 Dollars, 100000 dollars
+  // - With commas/decimals: 100,000.50
+  const numberRegex = /(?:[$€£¥]?\s*)?(\d{1,}(?:,\d{3})*(?:\.\d{1,2})?)\s*(?:USD|usd|dollars?|Dollars?|DOLLARS?)?/i;
+  const match = cleanValue.match(numberRegex);
+
+  if (!match || !match[1]) {
+    // If no clear number pattern found, return original value
+    return cleanValue;
+  }
+
+  // Extract the numeric part and clean it for parsing
+  let numericString = match[1];
+
+  // Handle European decimal notation (periods as thousands separators, comma as decimal)
+  // But only if there's no decimal point already
+  if (numericString.includes(',') && !numericString.includes('.')) {
+    // Check if comma is likely a decimal separator (last comma with 2 digits after)
+    const lastCommaIndex = numericString.lastIndexOf(',');
+    const afterLastComma = numericString.substring(lastCommaIndex + 1);
+
+    if (afterLastComma.length <= 2) {
+      // Treat as decimal separator
+      numericString = numericString.substring(0, lastCommaIndex).replace(/,/g, '') + '.' + afterLastComma;
+    } else {
+      // Treat commas as thousands separators
+      numericString = numericString.replace(/,/g, '');
+    }
+  } else {
+    // Remove commas (thousands separators)
+    numericString = numericString.replace(/,/g, '');
+  }
+
+  const numericValue = parseFloat(numericString);
+
+  if (isNaN(numericValue) || numericValue < 0) {
+    // Return original if parsing failed or negative
+    return cleanValue;
+  }
+
+  // Format as USD with proper comma separators
+  const formattedValue = numericValue.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: numericValue % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2
+  });
+
+  return formattedValue;
 }
 
 async function createOrFetchTag(forum, tagName) {
@@ -600,51 +644,68 @@ function formatResponseMessage(response, responseUrl) {
     const lowerKey = key.toLowerCase();
 
     try {
-      if (
-        !PROJECT_NAME_KEYS.some((nameKey) =>
-          lowerKey.includes(nameKey.toLowerCase())
-        )
-      ) {
-        if (lowerKey.includes("website")) {
-          let url = value.trim();
-          if (!url.startsWith("https://")) {
-            url = "https://" + url.replace(/^http:\/\//i, "");
-          }
-          try {
-            new URL(url);
-            navigationButtons.push(
-              new ButtonBuilder()
-                .setStyle(ButtonStyle.Link)
-                .setLabel("🌐 Website")
-                .setURL(url)
-            );
-          } catch (error) {
-            logger.warn(`Invalid website URL: ${url}`);
-          }
-        } else if (typeof value === "object" && !Array.isArray(value)) {
-          Object.entries(value).forEach(([fileName, fileUrl]) => {
-            const isWinningOffer = lowerKey.includes("winning");
-            const button = new ButtonBuilder()
-              .setStyle(ButtonStyle.Link)
-              .setLabel(
-                truncate(
-                  `${isWinningOffer ? "🏆 " : "📄 "}${cleanFileName(fileName)}`,
-                  80
-                )
-              )
-              .setURL(fileUrl);
-
-            if (isWinningOffer) {
-              winningOfferButtons.push(button);
-            } else {
-              otherOfferButtons.push(button);
-            }
-          });
-        } else {
-          message += `## ${key}\n${formatStringWithSubstrateAddresses(
-            value.toString()
-          )}\n\n`;
+      if (lowerKey.includes("website")) {
+        let url = value.trim();
+        if (!url.startsWith("https://")) {
+          url = "https://" + url.replace(/^http:\/\//i, "");
         }
+        try {
+          new URL(url);
+          navigationButtons.push(
+            new ButtonBuilder()
+              .setStyle(ButtonStyle.Link)
+              .setLabel("🌐 Website")
+              .setURL(url)
+          );
+        } catch (error) {
+          logger.warn(`Invalid website URL: ${url}`);
+        }
+      } else if (typeof value === "object" && !Array.isArray(value)) {
+        Object.entries(value).forEach(([fileName, fileUrl]) => {
+          const isWinningOffer = lowerKey.includes("winning");
+          const button = new ButtonBuilder()
+            .setStyle(ButtonStyle.Link)
+            .setLabel(
+              truncate(
+                `${isWinningOffer ? "🏆 " : "📄 "}${cleanFileName(fileName)}`,
+                80
+              )
+            )
+            .setURL(fileUrl);
+
+          if (isWinningOffer) {
+            winningOfferButtons.push(button);
+          } else {
+            otherOfferButtons.push(button);
+          }
+        });
+      } else {
+        // Check if this is a cost-related field and normalize it
+        const costKeys = [
+          "What is the total cost of the audit? (in US Dollars)",
+          "What is the total cost of the payout? (Bounty reporter + Platform fee, in US Dollars)",
+          "What is the bug bounty platform fee? (in US Dollars)",
+          "Total requested amount in USD",
+          "total cost",
+          "budget",
+          "funding amount",
+          "requested amount",
+          "payout"
+        ];
+
+        const isCostField = costKeys.some((costKey) =>
+          lowerKey.includes(costKey.toLowerCase())
+        );
+
+        let displayValue = value.toString();
+        if (isCostField && typeof value === 'string') {
+          const normalizedCost = normalizeCost(value);
+          displayValue = normalizedCost;
+        }
+
+        message += `## ${key}\n${formatStringWithSubstrateAddresses(
+          displayValue
+        )}\n\n`;
       }
     } catch (error) {
       logger.error(`Error processing entry ${key}: ${error.message}`);
